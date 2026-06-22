@@ -128,8 +128,14 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
         panel) so the user gets the operator's input form and the
         operation can run delegated.
         """
+        # Derive the operator URI from this panel's own plugin namespace so
+        # it resolves regardless of the plugin name the bundle is installed
+        # under (the operator ships in the same plugin as this panel). The
+        # previous hardcoded "@voxel51/panels/..." was the built-in URI and
+        # is "not found" when installed as a standalone plugin.
+        plugin = self.uri.rsplit("/", 1)[0]
         ctx.prompt(
-            "@voxel51/panels/compute_trajectory_embeddings",
+            f"{plugin}/compute_trajectory_embeddings",
             params=ctx.params,
             on_success=self._on_compute_success,
         )
