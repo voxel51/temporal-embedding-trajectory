@@ -1,0 +1,40 @@
+{
+    "name": "@voxel51/temporal-embedding-trajectory",
+    "version": "0.1.0",
+    "description": "Per-frame embedding trajectory panel for video scene analysis",
+    "license": "Apache-2.0",
+    "scripts": {
+        "build": "vite build",
+        "dev": "nodemon --watch ./src --ext js,jsx,ts,tsx --exec 'yarn build'",
+        "preview": "vite preview"
+    },
+    "files": [
+        "dist"
+    ],
+    "main": "src/index.ts",
+    "fiftyone": {
+        "script": "dist/index.umd.js"
+    },
+    "dependencies": {
+        "plotly.js": "^3.1.1",
+        "react-plotly.js": "^2.6.0"
+    },
+    "peerDependencies": {
+        "@fiftyone/components": "*",
+        "@fiftyone/operators": "*",
+        "@fiftyone/playback": "*",
+        "@fiftyone/plugins": "*",
+        "@fiftyone/spaces": "*",
+        "@fiftyone/state": "*",
+        "@mui/icons-material": "*",
+        "@voxel51/voodo": "*",
+        "jotai": "*",
+        "react": "*",
+        "recoil": "*"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-react": "^4.3.0",
+        "vite": "^7.3.2"
+    },
+    "packageManager": "yarn@4.9.1"
+}
