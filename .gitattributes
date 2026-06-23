@@ -1,0 +1,5 @@
+# Keep docs-only files out of `git archive` (the install ZIP) — they still
+# render on GitHub, just aren't shipped in the plugin bundle.
+assets/   export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
