@@ -1,9 +1,9 @@
 # Temporal Embedding Trajectory
 
 A [FiftyOne](https://github.com/voxel51/fiftyone) panel for analyzing **per-frame
-embedding trajectories** of videos. It embeds every frame, projects the
-embeddings to 2D (UMAP), and plots them so you can *see* where a model's
-understanding of the scene shifts — useful for finding the exact frames where
+embedding trajectories** of videos. It embeds every frame, scores how much the
+scene is changing, and plots the result so you can *see* where a model's
+understanding of the video shifts — useful for finding the exact frames where
 something changes (lighting, occlusion, a tunnel entrance, a new object, a false
 detection).
 
@@ -37,89 +37,83 @@ or copy this directory into your `FIFTYONE_PLUGINS_DIR`.
 ## Usage
 
 1. Install the plugin (above).
-2. Open a **video** dataset and open the **Temporal Embedding Trajectory** panel
-   (the `+` panel menu).
-3. Click **Compute** and choose a model + options (see [Compute](#compute)). This
-   runs the `compute_trajectory_embeddings` operator, which embeds the frames,
-   projects them, and writes the `<brain_key>_jump_dist` and
-   `<brain_key>_scene_shift` frame fields. On Enterprise this can run as a
-   scheduled/delegated operation (watch the dataset's **Runs** tab).
-4. Select the computed **brain key** and explore the four tabs below. Video
-   playback drives the yellow current-frame cursor across every view.
+2. Open a **video** dataset and add the **Temporal Embedding Trajectory** panel
+   (the `+` panel menu). Click **Compute** and choose a model + options (see
+   [Compute](#compute)). This runs the `compute_trajectory_embeddings`
+   operator, which embeds the frames, projects them to 2D, and writes the
+   `<brain_key>_jump_dist` and `<brain_key>_scene_shift` frame fields. On
+   Enterprise this runs as a scheduled/delegated operation (watch the dataset's
+   **Runs** tab).
+3. Once the run finishes, **open a video sample** and add the panel **in the
+   sample modal** to explore. Video playback drives the yellow cursor across
+   every view; clicking anywhere in the charts seeks the video.
 
 ### Compute
 
-![Compute dialog](assets/compute.png)
+<img src="assets/compute.png" alt="Compute dialog" width="620">
 
 | Field | Meaning |
 |-------|---------|
 | **Existing embeddings field** | Reuse an existing per-frame embedding field instead of running a model (the model setting is then ignored). |
-| **Embedding model** | `SigLIP2 B/16` (semantic — *what* is in the frame) or `DINOv2 ViT-B/14` (visual — *how* it looks). |
+| **Embedding model** | `SigLIP2 B/16` (semantic — *what* is in the frame) or `DINOv2 ViT-B/14` (visual — *how* it looks). They catch different kinds of change — comparing them is the point of Compare mode. |
 | **Brain key** | Where the UMAP projection is stored; also the prefix for the `_jump_dist` / `_scene_shift` frame fields. |
-| **Dimensionality reduction** | UMAP (default, needs `umap-learn`), t-SNE, or PCA. Seeded for reproducible layouts. |
-| **Scene-shift window (W)** | Half-window for the scene-shift score (see [Scenes](#scenes)). Smaller = sharper boundaries, larger = smoother. |
+| **Dimensionality reduction** | UMAP (default, needs `umap-learn`), t-SNE, or PCA. Seeded, so layouts are reproducible across runs. |
+| **Scene-shift window (W)** | Half-window for the scene-shift score. Smaller = sharper boundaries, larger = smoother. Automatically clamped to ¼ of each clip's length so short clips still get scores. |
 
-## The panel tabs
+## The panel
 
-### Scatter
+The panel has **two views** — Timeline and Trajectory — plus an evidence rail
+(scenes band, boundary cards, context filmstrip) that persists under both.
 
-![Scatter tab](assets/scatter.png)
+### Timeline
 
-Each grey dot is one frame at its position in embedding space (UMAP); a faint
-line connects frames in time. The blue **trajectory** highlights the most recent
-frames leading up to the **yellow cursor** (the current playback frame). **Red
-dots are "jumps"** — frames whose embedding moved sharply from the previous frame
-(consecutive-frame cosine distance above the **Jump σ** threshold), i.e. your
-scene-change candidates. The **jump frames** strip shows those frames; the
-**context** strip shows ±N frames around whatever frame you click.
+<img src="assets/timeline.png" alt="Timeline view" width="620">
 
-- **Trajectory length** — how many recent frames the blue trail covers.
-- **Jump σ** — how many standard deviations above the mean a frame must jump to be flagged red.
-- **Context** — ± frame radius for the context preview strip.
+One chart, two metrics — toggle between them at the top left:
 
-### Segments
+- **Scene shift** — `cosine_distance(mean(emb[t−W:t]), mean(emb[t:t+W]))`, the
+  windowed centroid score. Catches *gradual* transitions (tunnel entry/exit)
+  that per-frame distances smooth over.
+- **Jump** — frame-to-frame cosine distance. Catches *abrupt* single-frame
+  events.
 
-![Segments tab](assets/segments.png)
+Each metric keeps its own **σ threshold** — the dashed line on the chart.
+**Drag the dashed line** to tune it; peaks above it become detected events
+(markers on the curve). **Click anywhere to seek** the video; **←/→ step
+frames** (⇧ = ×10); hovering shows per-model values.
 
-The same UMAP geometry as Scatter, but points are **colored by scene segment**.
-Segments are the spans between scene-shift boundaries (see [Scenes](#scenes)), so
-the legend reads *scene 1, scene 2, …*. This is the scene-mining view: if the
-embedding captures distinct scenes, each segment forms its own cluster — and a
-frame whose color sits inside a *different* cluster is temporally in one scene but
-visually in another (an "out of place" anomaly). The **scene starts** strip shows
-the first frame of each segment.
+Flip on **Compare** to overlay a second model (B, orange). The chips row counts
+**All / Matched / Only A / Only B** events — matched within the ± frame
+tolerance. Chips **highlight** the event list below (non-matching cards dim,
+never disappear). Frames where *both* models spike are high-confidence scene
+changes; disagreements tell you what one embedding sees that the other misses.
 
-- **Scene σ** — boundary sensitivity (lower = more, smaller segments).
-- **Context** — ± frame radius for the context preview.
+### Trajectory
 
-### Compare
+<img src="assets/trajectory.png" alt="Trajectory view" width="620">
 
-![Compare tab](assets/compare.png)
+The 2-D projection of the embedding space. Grey dots are all frames; the
+**colored trail** connects the last N frames up to the cursor (hue = scene, per
+the detected boundaries); **red rings** mark jump frames; the **yellow dot** is
+the current frame. In Compare mode an A/B switch flips which model's projection
+you're looking at. Scene chips underneath seek to each segment.
 
-Overlays **two models** (Model A / Model B) on one axis: x = frame, y = per-frame
-jump distance (cosine). The key signal is **agreement** — frames where *both*
-models spike are high-confidence scene changes (not single-model noise). The
-strips break the flagged frames into **only A**, **both**, and **only B**. The
-yellow vertical line marks the current playback frame.
+Coherent scenes form tight clusters here — and a frame whose trail wanders into
+a *different* cluster is temporally in one scene but visually in another: the
+"out of place" anomaly this panel was built to surface.
 
-- **Jump σ** — outlier threshold for flagging jumps in each model.
-- **Match tol** — frame tolerance for counting two models' jumps as "the same" event.
-- **Context** — ± frame radius for the context preview.
+### Evidence rail (both views)
 
-### Scenes
+- **Scenes band** — each model's scene segments with white notches at cuts. In
+  Compare mode, connectors join cuts matched within tolerance; dashed stubs are
+  unmatched cuts.
+- **Boundaries** — one card per detected event: before → after thumbnails,
+  frame number, peak value, and an `A+B` / `A` / `B` badge. Click to seek.
+- **Context** — filmstrip of frames around the cursor with a per-frame signal
+  bar.
 
-![Scenes tab](assets/scenes.png)
-
-Plots each model's **windowed scene-shift score** over time: for frame `t`,
-`scene_shift(t) = cosine_distance(mean(emb[t-W:t]), mean(emb[t:t+W]))` — the
-distance between the average of the previous `W` frames and the next `W`.
-Diamonds mark detected **boundaries**. Because it compares windows rather than
-adjacent frames, it catches *gradual* transitions (e.g. a tunnel entrance/exit —
-the large peak in the screenshot) that the per-frame jump metric smooths over.
-The per-model **scenes** strips list each segment's start frame.
-
-- **Scene σ** — peak/boundary detection threshold.
-- **Context** — ± frame radius for the context preview.
+Niche knobs (Scene σ, Jump σ, match tolerance, context radius, trail length)
+live in the **⚙** popover.
 
 ## Requirements
 
@@ -135,27 +129,28 @@ SigLIP2) — not needed if you project an existing per-frame embeddings field.
   that renders a `composite_view` React component named
   `TemporalEmbeddingTrajectoryView`, plus the `compute_trajectory_embeddings`
   operator. `jump_dist(t)` = cosine distance between consecutive frame
-  embeddings; `scene_shift(t)` = the windowed boundary score above.
+  embeddings; `scene_shift(t)` = the windowed boundary score above. Event
+  detection, matching, and scene assignment happen client-side, so the σ
+  thresholds and tolerance respond instantly.
 - **JavaScript** ([`src/`](src)): the React views, bundled to
-  [`dist/index.umd.js`](dist/index.umd.js). The bundle self-registers the
-  component and externalizes the FiftyOne app's runtime globals (React, recoil,
+  [`dist/index.umd.js`](dist/index.umd.js) (~34 KB). Charts are hand-rolled
+  SVG — no charting library. The bundle self-registers the component and
+  externalizes the FiftyOne app's runtime globals (React, recoil,
   `@fiftyone/*`).
 
 ## Development
 
-The JS bundle is **prebuilt and committed**, so no build is needed to install. To
-rebuild it you need a local FiftyOne **source** checkout (the build externalizes
-`@fiftyone/*` and resolves them at build time):
+The JS bundle is **prebuilt and committed**, so no build is needed to install.
+The repo also builds **standalone** — no FiftyOne checkout required, since all
+`@fiftyone/*` imports are externalized to the app's runtime globals:
 
 ```bash
-export FIFTYONE_DIR=/path/to/fiftyone
-yarn install
-yarn link "$FIFTYONE_DIR/app" --all --private --relative
-yarn build          # -> dist/index.umd.js (IIFE; externalizes app globals)
+npm install
+npm run build    # -> dist/index.umd.js (IIFE; externalizes app globals)
 ```
 
-Build the bundle against the FiftyOne release your deployment runs, and keep
-`fiftyone.version` in [`fiftyone.yml`](fiftyone.yml) aligned.
+The externalized APIs are stable across FiftyOne 1.x; keep `fiftyone.version`
+in [`fiftyone.yml`](fiftyone.yml) aligned with the releases you deploy to.
 
 ## License
 
