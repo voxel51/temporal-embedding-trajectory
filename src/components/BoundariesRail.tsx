@@ -1,6 +1,6 @@
 import React from "react";
-import { COLOR_A, COLOR_B, fmt } from "../utils/analysis";
-import { T, Thumb } from "./ui";
+import { fmt } from "../utils/analysis";
+import { Tokens, Thumb, useT } from "./ui";
 
 export type BoundaryItem = {
   /** Index into the owning scene's arrays (model A's for A+B pairs). */
@@ -25,9 +25,9 @@ type Props = {
   onSeek: (frameNumber: number) => void;
 };
 
-const badgeStyle = (kind: BoundaryItem["kind"]): React.CSSProperties => ({
+const badgeStyle = (T: Tokens, kind: BoundaryItem["kind"]): React.CSSProperties => ({
   fontFamily: T.mono,
-  fontSize: 9,
+  fontSize: T.fsXs - 1.5,
   fontWeight: 600,
   padding: "2px 6px",
   borderRadius: 4,
@@ -38,7 +38,7 @@ const badgeStyle = (kind: BoundaryItem["kind"]): React.CSSProperties => ({
       : kind === "A"
       ? "rgba(88,166,255,.15)"
       : "rgba(240,136,62,.15)",
-  color: kind === "A+B" ? T.text : kind === "A" ? COLOR_A : COLOR_B,
+  color: kind === "A+B" ? T.text : kind === "A" ? T.a : T.b,
 });
 
 const hit = (item: BoundaryItem, filter: BoundaryFilter) =>
@@ -60,18 +60,19 @@ export default function BoundariesRail({
   media,
   onSeek,
 }: Props) {
+  const T = useT();
   return (
     <div style={{ padding: "11px 16px 9px", borderBottom: `1px solid ${T.border}` }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>{label}</span>
-        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted }}>{items.length}</span>
+        <span style={{ fontSize: T.fsLg, fontWeight: 600, color: T.text }}>{label}</span>
+        <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.textMuted }}>{items.length}</span>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 10.5, color: T.textDim }}>
+        <span style={{ fontSize: T.fsXs, color: T.textDim }}>
           click a card to seek · thumbs = before → after cut
         </span>
       </div>
       {items.length === 0 ? (
-        <div style={{ fontSize: 11.5, color: T.textDim, padding: "8px 0" }}>
+        <div style={{ fontSize: T.fsSm, color: T.textDim, padding: "8px 0" }}>
           No events at this σ — drag the dashed threshold down.
         </div>
       ) : (
@@ -102,7 +103,7 @@ export default function BoundariesRail({
                   sceneIdx={Math.max(0, b.sceneIdx - 1)}
                   style={{ width: 52, height: 34, borderRadius: 3, display: "inline-block" }}
                 />
-                <span style={{ color: T.textDim, fontSize: 11 }}>▸</span>
+                <span style={{ color: T.textDim, fontSize: T.fsSm }}>▸</span>
                 <Thumb
                   frameId={b.afterId}
                   media={media}
@@ -111,14 +112,14 @@ export default function BoundariesRail({
                 />
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.text }}>
+                <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.text }}>
                   #{b.frame}
                 </span>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>
+                <span style={{ fontFamily: T.mono, fontSize: T.fsXs, color: T.textMuted }}>
                   {fmt(b.value)}
                 </span>
                 <span style={{ flex: 1 }} />
-                <span style={badgeStyle(b.kind)}>{b.kind}</span>
+                <span style={badgeStyle(T, b.kind)}>{b.kind}</span>
               </span>
             </button>
           ))}

@@ -6,14 +6,14 @@ import React, {
   useState,
 } from "react";
 import { usePanelContext, usePanelStatePartial } from "@fiftyone/spaces";
+import { useRecoilValue } from "recoil";
+import * as fos from "@fiftyone/state";
 
 import { useTrajectoryData } from "../hooks/useTrajectoryData";
 import { useFrameSync } from "../hooks/useFrameSync";
 import { useCompareData } from "../hooks/useCompareData";
 import { useFrameMedia } from "../hooks/useFrameMedia";
 import {
-  COLOR_A,
-  COLOR_B,
   detectPeaks,
   indexOfFrame,
   matchPeaks,
@@ -26,7 +26,16 @@ import TrajectoryChart from "./TrajectoryChart";
 import AlignmentBand from "./AlignmentBand";
 import BoundariesRail, { BoundaryFilter, BoundaryItem } from "./BoundariesRail";
 import Filmstrip, { FilmFrame } from "./Filmstrip";
-import { T, segBtn, segWrap, selectStyle } from "./ui";
+import {
+  DARK,
+  LIGHT,
+  Tokens,
+  TokensProvider,
+  segBtn,
+  segWrap,
+  selectStyle,
+  useT,
+} from "./ui";
 import type { SceneTrajectory, TrajectoryViewProps } from "../types";
 
 type ViewKind = "timeline" | "trajectory";
@@ -42,6 +51,8 @@ function metricValues(s: SceneTrajectory, metric: MetricKind): number[] {
 }
 
 function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
+  const T = useT();
+  const styles = useMemo(() => makeStyles(T), [T]);
   // ── Panel state ────────────────────────────────────────────────────
   const [view, setView] = usePanelStatePartial<ViewKind>(
     "viewMode2",
@@ -264,11 +275,22 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
 
   // ── Filmstrip ──────────────────────────────────────────────────────
   const vMaxA = useMemo(() => Math.max(1e-9, ...valsA), [valsA]);
+  // The filmstrip is anchored to the user's EXPLICIT selection (clicking
+  // a boundary card, the chart, or a filmstrip cell) — not the playback
+  // cursor. Following playback would re-request thumbnail media on every
+  // frame while a video streams.
+  const selIdx = useMemo(
+    () =>
+      sceneA && selectedFrame != null
+        ? indexOfFrame(sceneA.frame_numbers, selectedFrame)
+        : -1,
+    [sceneA, selectedFrame]
+  );
   const film: FilmFrame[] = useMemo(() => {
-    if (!sceneA || cursorIdxA < 0) return [];
+    if (!sceneA || selIdx < 0) return [];
     const half = Math.max(1, ctx ?? 2);
     const out: FilmFrame[] = [];
-    for (let i = cursorIdxA - half; i <= cursorIdxA + half; i++) {
+    for (let i = selIdx - half; i <= selIdx + half; i++) {
       const ci = Math.max(0, Math.min(nA - 1, i));
       out.push({
         idx: i,
@@ -277,11 +299,11 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
         value: valsA[ci] ?? 0,
         frac: (valsA[ci] ?? 0) / vMaxA,
         sceneIdx: sceneOfA[ci] ?? 0,
-        isCurrent: ci === cursorIdxA,
+        isCurrent: ci === selIdx,
       });
     }
     return out;
-  }, [sceneA, cursorIdxA, ctx, nA, valsA, vMaxA, sceneOfA]);
+  }, [sceneA, selIdx, ctx, nA, valsA, vMaxA, sceneOfA]);
 
   // ── Frame media (thumbs for rail + filmstrip) ──────────────────────
   const mediaIds = useMemo(() => {
@@ -350,7 +372,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
     return (
       <div style={styles.root}>
         <div style={styles.cta}>
-          <p style={{ fontSize: 14, color: "rgba(220,220,230,.9)", margin: 0 }}>
+          <p style={{ fontSize: T.fsLg, color: T.text, margin: 0 }}>
             {noBrainKeys
               ? "Pick a model and click Compute to embed your video frames."
               : "Open a video sample in the modal to view its trajectory."}
@@ -358,7 +380,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
           <p
             style={{
               color: T.textDim,
-              fontSize: 11,
+              fontSize: T.fsSm,
               maxWidth: 360,
               margin: 0,
             }}
@@ -385,7 +407,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
     background: on ? "rgba(90,141,238,.14)" : "transparent",
     color: on ? "#cfe0ff" : T.textMuted,
     fontFamily: T.sans,
-    fontSize: 11.5,
+    fontSize: T.fsSm,
     fontWeight: 600,
   });
 
@@ -408,15 +430,15 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
     <div style={styles.root}>
       {/* ── Toolbar ─────────────────────────────────────────────────── */}
       <div style={styles.toolbar}>
-        <div style={segWrap}>
+        <div style={segWrap(T)}>
           <button
-            style={segBtn(view === "timeline")}
+            style={segBtn(T, view === "timeline")}
             onClick={() => setView("timeline")}
           >
             Timeline
           </button>
           <button
-            style={segBtn(view === "trajectory")}
+            style={segBtn(T, view === "trajectory")}
             onClick={() => setView("trajectory")}
           >
             Trajectory
@@ -428,14 +450,14 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               width: 8,
               height: 8,
               borderRadius: "50%",
-              background: COLOR_A,
+              background: T.a,
             }}
           />
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>
+          <span style={{ fontFamily: T.mono, fontSize: T.fsXs, color: T.textMuted }}>
             A
           </span>
           <select
-            style={selectStyle}
+            style={selectStyle(T)}
             value={brainA ?? ""}
             onChange={(e) => setBrainA(e.target.value || null)}
             disabled={noBrainKeys}
@@ -452,7 +474,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
           </select>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-          <span style={{ fontSize: 12, color: T.textMuted }}>Compare</span>
+          <span style={{ fontSize: T.fsMd, color: T.textMuted }}>Compare</span>
           <button
             onClick={() => {
               setCompare(!compare);
@@ -492,16 +514,16 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: COLOR_B,
+                background: T.b,
               }}
             />
             <span
-              style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}
+              style={{ fontFamily: T.mono, fontSize: T.fsXs, color: T.textMuted }}
             >
               B
             </span>
             <select
-              style={selectStyle}
+              style={selectStyle(T)}
               value={brainB ?? ""}
               onChange={(e) => setBrainB(e.target.value || null)}
               disabled={noBrainKeys}
@@ -527,7 +549,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               border: `1px solid ${settingsOpen ? T.accentSoft : T.borderHi}`,
               background: settingsOpen ? T.bgRaised : "transparent",
               color: T.textSoft,
-              fontSize: 14,
+              fontSize: T.fsLg,
             }}
             title="Detection & display settings"
           >
@@ -581,7 +603,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                 />
                 <div
                   style={{
-                    fontSize: 10,
+                    fontSize: T.fsXs,
                     color: T.textDim,
                     lineHeight: 1.4,
                     marginTop: 4,
@@ -640,7 +662,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
           </button>
           <span style={{ flex: 1 }} />
           <span
-            style={{ fontSize: 10.5, color: T.textDim, whiteSpace: "nowrap" }}
+            style={{ fontSize: T.fsXs, color: T.textDim, whiteSpace: "nowrap" }}
           >
             observed at σ {activeSigma.toFixed(2)} · chips highlight, don't hide
           </span>
@@ -673,16 +695,16 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ ...segWrap, borderRadius: 7, padding: 2 }}>
-                <button style={segBtn(!jm)} onClick={() => setMetric("scene")}>
+              <div style={{ ...segWrap(T), borderRadius: 7, padding: 2 }}>
+                <button style={segBtn(T, !jm)} onClick={() => setMetric("scene")}>
                   Scene shift
                 </button>
-                <button style={segBtn(jm)} onClick={() => setMetric("jump")}>
+                <button style={segBtn(T, jm)} onClick={() => setMetric("jump")}>
                   Jump
                 </button>
               </div>
               <span
-                style={{ fontSize: 11, color: T.textDim, whiteSpace: "nowrap" }}
+                style={{ fontSize: T.fsSm, color: T.textDim, whiteSpace: "nowrap" }}
               >
                 {jm
                   ? "jump · frame-to-frame cosine distance"
@@ -690,24 +712,24 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                   ? "no scene-shift data — re-run Compute to populate it"
                   : "scene shift · window-centroid cosine distance"}
               </span>
-              <span style={legendStyle}>
+              <span style={legendStyle(T)}>
                 <span
                   style={{
                     width: 10,
                     height: 2,
-                    background: COLOR_A,
+                    background: T.a,
                     display: "inline-block",
                   }}
                 />
                 {brainA}
               </span>
               {sceneB && (
-                <span style={legendStyle}>
+                <span style={legendStyle(T)}>
                   <span
                     style={{
                       width: 10,
                       height: 2,
-                      background: COLOR_B,
+                      background: T.b,
                       display: "inline-block",
                     }}
                   />
@@ -715,7 +737,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                 </span>
               )}
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 10.5, color: T.textDim }}>
+              <span style={{ fontSize: T.fsXs, color: T.textDim }}>
                 drag ┄ to set σ · click to seek · ←→ step
               </span>
             </div>
@@ -745,25 +767,25 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                 marginBottom: 4,
               }}
             >
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>
+              <span style={{ fontSize: T.fsLg, fontWeight: 600, color: T.text }}>
                 Embedding trajectory
               </span>
-              <span style={{ fontSize: 11, color: T.textDim }}>
+              <span style={{ fontSize: T.fsSm, color: T.textDim }}>
                 2-D projection ·{" "}
                 <span style={{ fontFamily: T.mono }}>{trajSceneKey}</span> ·
                 trail = last {win} fr · red rings = jumps
               </span>
               <span style={{ flex: 1 }} />
               {compare && sceneB && (
-                <div style={{ ...segWrap, borderRadius: 7, padding: 2 }}>
+                <div style={{ ...segWrap(T), borderRadius: 7, padding: 2 }}>
                   <button
-                    style={segBtn(trajModel === "A")}
+                    style={segBtn(T, trajModel === "A")}
                     onClick={() => setTrajModel("A")}
                   >
                     A
                   </button>
                   <button
-                    style={segBtn(trajModel === "B")}
+                    style={segBtn(T, trajModel === "B")}
                     onClick={() => setTrajModel("B")}
                   >
                     B
@@ -797,7 +819,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
             <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
               <span
                 style={{
-                  fontSize: 12.5,
+                  fontSize: T.fsLg,
                   fontWeight: 600,
                   color: T.text,
                   whiteSpace: "nowrap",
@@ -808,7 +830,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               {sceneB && (
                 <span
                   style={{
-                    fontSize: 10.5,
+                    fontSize: T.fsXs,
                     color: T.textDim,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -823,7 +845,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               <span style={{ flex: 1 }} />
               <span
                 style={{
-                  fontSize: 10.5,
+                  fontSize: T.fsXs,
                   color: T.textDim,
                   whiteSpace: "nowrap",
                 }}
@@ -856,10 +878,10 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
         )}
 
         {/* ── Context filmstrip ────────────────────────────────────── */}
-        {sceneA && film.length > 0 && (
+        {sceneA && selectedFrame != null && film.length > 0 && (
           <Filmstrip
             frames={film}
-            centerFrame={activeFrame ?? 0}
+            centerFrame={selectedFrame}
             ctx={ctx ?? 2}
             media={media}
             onSeek={handleSeek}
@@ -876,14 +898,14 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
   );
 }
 
-const legendStyle: React.CSSProperties = {
+const legendStyle = (T: Tokens): React.CSSProperties => ({
   display: "inline-flex",
   alignItems: "center",
   gap: 5,
   fontFamily: T.mono,
-  fontSize: 10.5,
+  fontSize: T.fsSm,
   color: T.textMuted,
-};
+});
 
 function Slider({
   label,
@@ -902,13 +924,14 @@ function Slider({
   onChange: (v: number) => void;
   fmt?: (v: number) => string;
 }) {
+  const T = useT();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          fontSize: 11.5,
+          fontSize: T.fsSm,
           color: T.textSoft,
         }}
       >
@@ -934,13 +957,21 @@ export default function TemporalEmbeddingTrajectoryView(
   props: TrajectoryViewProps
 ) {
   const panelContext = usePanelContext();
+  const mode = useRecoilValue(fos.theme);
   const panelId = panelContext?.node?.id;
   if (!panelId) return null;
 
+  const tokens = mode === "light" ? LIGHT : DARK;
   return (
-    <Suspense fallback={<div style={styles.empty}>Loading…</div>}>
-      <TemporalEmbeddingTrajectoryReady {...props} />
-    </Suspense>
+    <TokensProvider value={tokens}>
+      <Suspense
+        fallback={
+          <div style={{ padding: 16, color: tokens.textMuted }}>Loading…</div>
+        }
+      >
+        <TemporalEmbeddingTrajectoryReady {...props} />
+      </Suspense>
+    </TokensProvider>
   );
 }
 
@@ -948,7 +979,7 @@ export default function TemporalEmbeddingTrajectoryView(
 // Styles
 // ──────────────────────────────────────────────────────────────────────
 
-const styles: Record<string, React.CSSProperties> = {
+const makeStyles = (T: Tokens): Record<string, React.CSSProperties> => ({
   root: {
     display: "flex",
     flexDirection: "column",
@@ -987,7 +1018,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 40,
     width: 264,
     background: T.bgRaised,
-    border: "1px solid #2e3338",
+    border: `1px solid ${T.borderHi}`,
     borderRadius: 9,
     padding: 14,
     boxShadow: "0 14px 34px rgba(0,0,0,.5)",
@@ -1004,7 +1035,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#fff",
     fontFamily: T.sans,
     fontWeight: 600,
-    fontSize: 12.5,
+    fontSize: T.fsMd,
     letterSpacing: ".3px",
   },
   body: {
@@ -1018,7 +1049,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     height: "100%",
-    color: "rgba(170,170,190,.85)",
+    color: T.textMuted,
     fontSize: 13,
     textAlign: "center",
     padding: 16,
@@ -1037,10 +1068,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     padding: "7px 16px",
-    background: "#121417",
+    background: T.statusBg,
     borderTop: `1px solid ${T.border}`,
     fontFamily: T.mono,
-    fontSize: 10.5,
-    color: "#737b83",
+    fontSize: T.fsXs,
+    color: T.textDim,
   },
-};
+});

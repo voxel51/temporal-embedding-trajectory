@@ -11,6 +11,8 @@ understanding shifted (e.g. lighting change, occlusion, false detection).
 |
 """
 
+import contextlib
+import io
 import logging
 
 import fiftyone.operators.types as types
@@ -22,7 +24,45 @@ from .operators import ComputeTrajectoryEmbeddings
 logger = logging.getLogger(__name__)
 
 
+@contextlib.contextmanager
+def _silenced():
+    """Suppress stdout/stderr and fiftyone-internal logging.
+
+    The panel runtime captures per-request stdout/stderr and tears
+    them down when the request completes. Any fiftyone progress bar
+    (tqdm-style, writes to sys.stderr) or internal ``logging`` call
+    that retains a reference to that closed stream raises
+    ``ValueError: I/O operation on closed file`` on the next request
+    — which then makes our own ``logger.warning`` fallback fail too,
+    producing a confusing double-fault traceback.
+
+    Redirecting std streams handles the tqdm/print side; temporarily
+    swapping the ``fiftyone`` logger to a NullHandler handles the
+    library-logging side (which routes through its own stream
+    objects, not sys.stdout).
+    """
+    fo_logger = logging.getLogger("fiftyone")
+    saved_handlers = fo_logger.handlers[:]
+    saved_propagate = fo_logger.propagate
+    fo_logger.handlers = [logging.NullHandler()]
+    fo_logger.propagate = False
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        fo_logger.handlers = saved_handlers
+        fo_logger.propagate = saved_propagate
+
+
 _PANEL_NAME = "temporal_embedding_trajectory"
+
+# Datasets whose frame images have already been materialized via
+# ``to_frames(sample_frames=True)`` in this process. That call extracts
+# frames to disk and writes ``filepath`` onto every frame document —
+# slow and noisy — and only needs to run once per dataset. Subsequent
+# thumbnail lookups use the cheap ``to_frames()`` view stage.
+_FRAMES_WARMED: set = set()
 
 
 class TemporalEmbeddingTrajectoryPanel(Panel):
@@ -169,21 +209,34 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
             return {}
 
         try:
-            media_type = getattr(dataset, "media_type", None)
-            if media_type == "video":
-                # Frame documents live in the parent's frames collection;
-                # to_frames(sample_frames=True) materialized filepaths.
-                frames = dataset.to_frames(sample_frames=True)
-                view = frames.select(frame_ids)
-            else:
-                view = dataset.select(frame_ids)
+            # Silence fiftyone's stdout/stderr/logging during these
+            # calls — see _silenced() for the closed-stream background.
+            with _silenced():
+                if getattr(dataset, "media_type", None) == "video":
+                    # First time we see this dataset in this process:
+                    # run the expensive sample_frames=True
+                    # materialization so each frame doc has a
+                    # ``filepath``. After that, plain ``to_frames()``
+                    # is a cheap view-only stage.
+                    ds_key = getattr(dataset, "name", None) or id(dataset)
+                    if ds_key not in _FRAMES_WARMED:
+                        dataset.to_frames(sample_frames=True)
+                        _FRAMES_WARMED.add(ds_key)
+                    view = dataset.to_frames().select(frame_ids)
+                else:
+                    view = dataset.select(frame_ids)
 
-            ids, filepaths = view.values(["id", "filepath"])
+                ids, filepaths = view.values(["id", "filepath"])
             media = {str(i): fp for i, fp in zip(ids, filepaths) if fp}
             ctx.panel.set_data("frame_media", media)
             return media
         except Exception as e:
-            logger.warning("Failed to resolve frame media: %s", e)
+            # The per-request log stream may itself be closed; never
+            # let the fallback logging crash the return path.
+            try:
+                logger.warning("Failed to resolve frame media: %s", e)
+            except Exception:
+                pass
             return {}
 
     def seek_to_frame(self, ctx):

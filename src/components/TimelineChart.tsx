@@ -1,14 +1,12 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
-  COLOR_A,
-  COLOR_B,
   Peak,
   Stats,
   fmt,
   indexOfFrame,
   niceTicks,
 } from "../utils/analysis";
-import { T } from "./ui";
+import { useT } from "./ui";
 
 // ViewBox geometry (the SVG scales responsively; all math is in these units).
 const W = 948;
@@ -51,6 +49,7 @@ export default function TimelineChart({
   onSeek,
   onSigma,
 }: Props) {
+  const T = useT();
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hover, setHover] = useState<number | null>(null); // index into a.frames
 
@@ -175,8 +174,8 @@ export default function TimelineChart({
         cx: x(a.frames[p.i]),
         cy: y(p.v),
         r: mm ? 4.5 : 4,
-        fill: mm || !b ? COLOR_A : T.bg,
-        stroke: mm ? T.text : COLOR_A,
+        fill: mm || !b ? T.a : T.bg,
+        stroke: mm ? T.text : T.a,
       });
     }
     if (b) {
@@ -187,13 +186,13 @@ export default function TimelineChart({
           cx: x(b.frames[p.i]),
           cy: y(p.v),
           r: mm ? 4.5 : 4,
-          fill: mm ? COLOR_B : T.bg,
-          stroke: mm ? T.text : COLOR_B,
+          fill: mm ? T.b : T.bg,
+          stroke: mm ? T.text : T.b,
         });
       }
     }
     return out;
-  }, [a, b, x, y]);
+  }, [a, b, x, y, T]);
 
   const cursorX = cursorFrame != null ? x(cursorFrame) : null;
   const hoverI = hover;
@@ -209,7 +208,7 @@ export default function TimelineChart({
         {ticksX.map((t) => (
           <g key={"x" + t.f}>
             <line x1={t.px} x2={t.px} y1={PT} y2={PB} stroke={T.grid} strokeWidth={1} />
-            <text x={t.px} y={283} textAnchor="middle" fill={T.textDim} style={{ font: `10px ${T.mono}` }}>
+            <text x={t.px} y={283} textAnchor="middle" fill={T.textDim} style={{ font: `${T.fsTick}px ${T.mono}` }}>
               {t.f}
             </text>
           </g>
@@ -217,7 +216,7 @@ export default function TimelineChart({
         {ticksY.map((t) => (
           <g key={"y" + t.v.toFixed(4)}>
             <line x1={PL} x2={PR} y1={t.py} y2={t.py} stroke={T.gridSoft} strokeWidth={1} />
-            <text x={PL - 6} y={t.py} dy={3} textAnchor="end" fill={T.textDim} style={{ font: `10px ${T.mono}` }}>
+            <text x={PL - 6} y={t.py} dy={3} textAnchor="end" fill={T.textDim} style={{ font: `${T.fsTick}px ${T.mono}` }}>
               {t.v.toFixed(2)}
             </text>
           </g>
@@ -229,26 +228,26 @@ export default function TimelineChart({
               x2={PR}
               y1={y(Math.min(thrB, vMax))}
               y2={y(Math.min(thrB, vMax))}
-              stroke={COLOR_B}
+              stroke={T.b}
               strokeWidth={1}
               strokeDasharray="3 5"
               opacity={0.35}
             />
-            <path d={pathB} fill="none" stroke={COLOR_B} strokeWidth={1.6} opacity={0.9} />
+            <path d={pathB} fill="none" stroke={T.b} strokeWidth={1.6} opacity={0.9} />
           </g>
         )}
-        <path d={pathA} fill="none" stroke={COLOR_A} strokeWidth={1.6} />
-        <line x1={PL} x2={PR} y1={thrAY} y2={thrAY} stroke="#aab3bc" strokeWidth={1} strokeDasharray="5 4" opacity={0.75} />
-        <text x={PR - 4} y={thrAY} dy={-5} textAnchor="end" fill="#aab3bc" style={{ font: `10px ${T.mono}` }}>
+        <path d={pathA} fill="none" stroke={T.a} strokeWidth={1.6} />
+        <line x1={PL} x2={PR} y1={thrAY} y2={thrAY} stroke={T.thr} strokeWidth={1} strokeDasharray="5 4" opacity={0.75} />
+        <text x={PR - 4} y={thrAY} dy={-5} textAnchor="end" fill={T.thr} style={{ font: `${T.fsTick}px ${T.mono}` }}>
           {`σ ${sigma.toFixed(2)} · thr ${fmt(thrA)}`}
         </text>
         {hoverI != null && (
-          <line x1={x(a.frames[hoverI])} x2={x(a.frames[hoverI])} y1={PT} y2={PB} stroke="#ffffff" strokeWidth={1} opacity={0.14} />
+          <line x1={x(a.frames[hoverI])} x2={x(a.frames[hoverI])} y1={PT} y2={PB} stroke={T.mode === "dark" ? "#ffffff" : "#000000"} strokeWidth={1} opacity={0.14} />
         )}
         {cursorX != null && (
           <g>
             <line x1={cursorX} x2={cursorX} y1={PT} y2={PB} stroke={T.cursor} strokeWidth={1.2} opacity={0.9} />
-            <text x={cursorX} y={10} textAnchor="middle" fill={T.cursor} style={{ font: `10px ${T.mono}` }}>
+            <text x={cursorX} y={10} textAnchor="middle" fill={T.cursor} style={{ font: `${T.fsTick}px ${T.mono}` }}>
               {cursorFrame}
             </text>
           </g>
@@ -287,8 +286,8 @@ export default function TimelineChart({
             left: `${(x(a.frames[hoverI]) / W) * 100}%`,
             top: 20,
             transform: "translateX(-50%)",
-            background: "#22262b",
-            border: "1px solid #2e3338",
+            background: T.hoverBg,
+            border: `1px solid ${T.borderHi}`,
             borderRadius: 6,
             padding: "5px 9px",
             pointerEvents: "none",
@@ -297,14 +296,14 @@ export default function TimelineChart({
             boxShadow: "0 6px 18px rgba(0,0,0,.4)",
           }}
         >
-          <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.text }}>
+          <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.text }}>
             fr {a.frames[hoverI]}
           </span>
-          <span style={{ fontFamily: T.mono, fontSize: 10.5, color: COLOR_A, marginLeft: 8 }}>
+          <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.a, marginLeft: 8 }}>
             {fmt(a.values[hoverI])}
           </span>
           {b && (
-            <span style={{ fontFamily: T.mono, fontSize: 10.5, color: COLOR_B, marginLeft: 8 }}>
+            <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.b, marginLeft: 8 }}>
               {/* B may have different coverage — look up by frame, not index */}
               {fmt(b.values[indexOfFrame(b.frames, a.frames[hoverI])])}
             </span>

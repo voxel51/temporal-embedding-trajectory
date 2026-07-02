@@ -1,6 +1,6 @@
 import React from "react";
-import { COLOR_A, fmt } from "../utils/analysis";
-import { T, Thumb } from "./ui";
+import { fmt } from "../utils/analysis";
+import { Thumb, useT } from "./ui";
 
 export type FilmFrame = {
   idx: number;
@@ -23,15 +23,16 @@ type Props = {
 
 /** Context filmstrip around the current frame with a per-frame signal bar. */
 export default function Filmstrip({ frames, centerFrame, ctx, media, onSeek }: Props) {
+  const T = useT();
   return (
     <div style={{ padding: "11px 16px 12px" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>Context</span>
-        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: T.fsLg, fontWeight: 600, color: T.text }}>Context</span>
+        <span style={{ fontFamily: T.mono, fontSize: T.fsSm, color: T.textMuted, whiteSpace: "nowrap" }}>
           frame {centerFrame} ± {ctx}
         </span>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 10.5, color: T.textDim }}>bar = signal A at frame</span>
+        <span style={{ fontSize: T.fsXs, color: T.textDim }}>bar = signal A at frame</span>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         {frames.map((f) => (
@@ -62,7 +63,7 @@ export default function Filmstrip({ frames, centerFrame, ctx, media, onSeek }: P
                 display: "flex",
                 justifyContent: "space-between",
                 fontFamily: T.mono,
-                fontSize: 10.5,
+                fontSize: T.fsSm,
                 color: T.textSoft,
               }}
             >
@@ -75,7 +76,7 @@ export default function Filmstrip({ frames, centerFrame, ctx, media, onSeek }: P
                   display: "block",
                   height: 3,
                   width: `${Math.min(100, Math.round(f.frac * 100))}%`,
-                  background: COLOR_A,
+                  background: T.a,
                   borderRadius: 2,
                 }}
               />

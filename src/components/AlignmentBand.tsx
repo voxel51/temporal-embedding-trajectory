@@ -1,13 +1,11 @@
 import React, { useMemo } from "react";
 import {
-  COLOR_A,
-  COLOR_B,
   MatchResult,
   Peak,
   sceneFill,
   segmentsOf,
 } from "../utils/analysis";
-import { T } from "./ui";
+import { useT } from "./ui";
 
 const W = 948;
 const PL = 48;
@@ -43,6 +41,7 @@ export default function AlignmentBand({
   fMin,
   fMax,
 }: Props) {
+  const T = useT();
   const span = Math.max(1, fMax - fMin);
   const x = (frame: number) => PL + ((frame - fMin) / span) * (PR - PL);
 
@@ -67,7 +66,7 @@ export default function AlignmentBand({
 
   return (
     <svg viewBox={`0 0 ${W} ${bandH}`} style={{ display: "block", width: "100%", height: "auto" }}>
-      <text x={30} y={17} textAnchor="end" fill={COLOR_A} style={{ font: `600 10px ${T.mono}` }}>
+      <text x={30} y={17} textAnchor="end" fill={T.a} style={{ font: `600 ${T.fsTick}px ${T.mono}` }}>
         A
       </text>
       {segsA.map((s) => (
@@ -89,7 +88,7 @@ export default function AlignmentBand({
       )}
       {b && match && (
         <g>
-          <text x={30} y={50} textAnchor="end" fill={COLOR_B} style={{ font: `600 10px ${T.mono}` }}>
+          <text x={30} y={50} textAnchor="end" fill={T.b} style={{ font: `600 ${T.fsTick}px ${T.mono}` }}>
             B
           </text>
           {segsB.map((s) => (
@@ -117,7 +116,7 @@ export default function AlignmentBand({
               x2={x(a.frames[p.i])}
               y1={21}
               y2={28}
-              stroke={COLOR_A}
+              stroke={T.a}
               strokeWidth={1.4}
               strokeDasharray="2 2"
             />
@@ -129,7 +128,7 @@ export default function AlignmentBand({
               x2={x(b.frames[p.i])}
               y1={30}
               y2={37}
-              stroke={COLOR_B}
+              stroke={T.b}
               strokeWidth={1.4}
               strokeDasharray="2 2"
             />

@@ -4,7 +4,7 @@ import {
   sceneSolid,
   segmentsOf,
 } from "../utils/analysis";
-import { T } from "./ui";
+import { useT } from "./ui";
 
 const W = 948;
 const H = 396;
@@ -43,6 +43,7 @@ export default function TrajectoryChart({
   win,
   onSeek,
 }: Props) {
+  const T = useT();
   const n = points.length;
 
   const { px, py } = useMemo(() => {
@@ -123,9 +124,9 @@ export default function TrajectoryChart({
         <line x1={0} x2={W} y1={H / 2} y2={H / 2} stroke={T.grid} />
         <line x1={W / 2} x2={W / 2} y1={0} y2={H} stroke={T.grid} />
         {grey.map((p) => (
-          <circle key={p.key} cx={p.cx} cy={p.cy} r={1.8} fill="#343a41" />
+          <circle key={p.key} cx={p.cx} cy={p.cy} r={1.8} fill={T.greyPoint} />
         ))}
-        <path d={trailPath} fill="none" stroke="#cfd6dd" strokeWidth={1} opacity={0.28} />
+        <path d={trailPath} fill="none" stroke={T.trailLine} strokeWidth={1} opacity={0.28} />
         {trail.map((p) => (
           <circle key={p.key} cx={p.cx} cy={p.cy} r={2.6} fill={p.fill} />
         ))}
@@ -161,7 +162,7 @@ export default function TrajectoryChart({
               background: c.active ? T.bgRaised : "transparent",
               color: T.textSoft,
               fontFamily: T.sans,
-              fontSize: 11,
+              fontSize: T.fsMd,
               fontWeight: 600,
             }}
           >
@@ -175,7 +176,7 @@ export default function TrajectoryChart({
               }}
             />
             {c.label}
-            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textDim, marginLeft: 5 }}>
+            <span style={{ fontFamily: T.mono, fontSize: T.fsXs, color: T.textDim, marginLeft: 5 }}>
               {c.range}
             </span>
           </button>
