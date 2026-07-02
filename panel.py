@@ -21,6 +21,18 @@ from fiftyone.operators.panel import Panel, PanelConfig
 
 from .operators import ComputeTrajectoryEmbeddings
 
+try:
+    # FiftyOne Enterprise: resolve cloud filepaths (s3://, gs://, ...) to
+    # signed HTTPS URLs the browser can load directly. Local and http
+    # paths pass through unchanged.
+    from fiftyone.server.routes.signed_url import get_signed_url
+except ImportError:
+    # OSS: the App serves local filepaths via its /media route, and the
+    # frontend's getSampleSrc() handles that wrapping — passthrough here.
+    def get_signed_url(path):
+        return path
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -227,7 +239,11 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
                     view = dataset.select(frame_ids)
 
                 ids, filepaths = view.values(["id", "filepath"])
-            media = {str(i): fp for i, fp in zip(ids, filepaths) if fp}
+            media = {
+                str(i): get_signed_url(fp)
+                for i, fp in zip(ids, filepaths)
+                if fp
+            }
             ctx.panel.set_data("frame_media", media)
             return media
         except Exception as e:
