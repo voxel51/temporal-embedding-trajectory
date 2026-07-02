@@ -61,7 +61,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
   );
   const [metric, setMetric] = usePanelStatePartial<MetricKind>(
     "metric",
-    "scene",
+    "jump",
     true
   );
   const [compare, setCompare] = usePanelStatePartial<boolean>(

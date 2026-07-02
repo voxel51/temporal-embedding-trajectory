@@ -138,10 +138,18 @@ export default function TrajectoryChart({
         ))}
         <path d={trailPath} fill="none" stroke={T.trailLine} strokeWidth={1} opacity={0.28} />
         {trail.map((p) => (
-          <circle key={p.key} cx={p.cx} cy={p.cy} r={2.6} fill={p.fill} />
+          <circle key={p.key} cx={p.cx} cy={p.cy} r={3.4} fill={p.fill} />
         ))}
         {rings.map((p) => (
-          <circle key={p.key} cx={p.cx} cy={p.cy} r={5.5} fill="none" stroke="#ff5c5c" strokeWidth={1.6} />
+          <circle
+            key={p.key}
+            cx={p.cx}
+            cy={p.cy}
+            r={6}
+            fill="rgba(255,80,80,0.18)"
+            stroke="#ff4d4d"
+            strokeWidth={2.2}
+          />
         ))}
         {cursorIdx >= 0 && (
           <circle
