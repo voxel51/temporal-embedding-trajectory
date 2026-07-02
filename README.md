@@ -54,7 +54,7 @@ or copy this directory into your `FIFTYONE_PLUGINS_DIR`.
 | Field | Meaning |
 |-------|---------|
 | **Existing embeddings field** | Reuse an existing per-frame embedding field instead of running a model (the model setting is then ignored). |
-| **Embedding model** | `CLIP ViT-B/32` (semantic — *what* is in the frame) or `DINOv2 ViT-B/14` (visual — *how* it looks). |
+| **Embedding model** | `SigLIP2 B/16` (semantic — *what* is in the frame) or `DINOv2 ViT-B/14` (visual — *how* it looks). |
 | **Brain key** | Where the UMAP projection is stored; also the prefix for the `_jump_dist` / `_scene_shift` frame fields. |
 | **Dimensionality reduction** | UMAP (default, needs `umap-learn`), t-SNE, or PCA. Seeded for reproducible layouts. |
 | **Scene-shift window (W)** | Half-window for the scene-shift score (see [Scenes](#scenes)). Smaller = sharper boundaries, larger = smoother. |
@@ -125,9 +125,9 @@ The per-model **scenes** strips list each segment's start frame.
 
 See [`requirements.txt`](requirements.txt). `numpy` + `fiftyone-brain` are
 required; `umap-learn` for the default UMAP method (PCA / t-SNE need no extra
-dependency). Computing **new** embeddings with the built-in CLIP / DINOv2 zoo
-models also needs `torch` + `torchvision` — not needed if you project an existing
-per-frame embeddings field.
+dependency). Computing **new** embeddings with the built-in SigLIP2 / DINOv2 zoo
+models also needs `torch` + `torchvision` (plus `transformers>=4.51` for
+SigLIP2) — not needed if you project an existing per-frame embeddings field.
 
 ## How it works
 

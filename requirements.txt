@@ -2,7 +2,10 @@ numpy
 fiftyone-brain
 # UMAP is the default dimensionality-reduction method; PCA/t-SNE need no extra dep
 umap-learn
-# Computing NEW embeddings with the built-in CLIP/DINOv2 zoo models also requires
-# torch + torchvision. Omit if you only project an existing embeddings field.
+# Computing NEW embeddings with the built-in zoo models also requires:
+#   SigLIP2:  torch + torchvision + transformers>=4.51
+#   DINOv2:   torch + torchvision
+# Omit if you only project an existing embeddings field.
 # torch
 # torchvision
+# transformers>=4.51

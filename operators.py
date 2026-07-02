@@ -99,8 +99,10 @@ def _list_existing_embedding_fields(ctx):
 
 _DEFAULT_BRAIN_KEY = "temporal_trajectory"
 
+# Note: the zoo name says "siglip" but the checkpoint it loads is
+# google/siglip2-base-patch16-224 (SigLIP2). Requires transformers>=4.51.
 _MODEL_CHOICES = [
-    ("clip-vit-base32-torch", "CLIP ViT-B/32 (semantic)"),
+    ("siglip-base-patch16-224-torch", "SigLIP2 B/16 (semantic)"),
     ("dinov2-vitb14-torch", "DINOv2 ViT-B/14 (visual)"),
 ]
 
