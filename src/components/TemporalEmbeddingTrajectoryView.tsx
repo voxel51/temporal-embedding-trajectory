@@ -430,6 +430,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
     <div style={styles.root}>
       {/* ── Toolbar ─────────────────────────────────────────────────── */}
       <div style={styles.toolbar}>
+        <div style={styles.toolbarLeft}>
         <div style={segWrap(T)}>
           <button
             style={segBtn(T, view === "timeline")}
@@ -457,7 +458,8 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
             A
           </span>
           <select
-            style={selectStyle(T)}
+            title={brainA ?? ""}
+            style={{ ...selectStyle(T), maxWidth: 180 }}
             value={brainA ?? ""}
             onChange={(e) => setBrainA(e.target.value || null)}
             disabled={noBrainKeys}
@@ -523,7 +525,8 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               B
             </span>
             <select
-              style={selectStyle(T)}
+              title={brainB ?? ""}
+              style={{ ...selectStyle(T), maxWidth: 180 }}
               value={brainB ?? ""}
               onChange={(e) => setBrainB(e.target.value || null)}
               disabled={noBrainKeys}
@@ -537,8 +540,8 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
             </select>
           </div>
         )}
-        <span style={{ flex: 1 }} />
-        <div style={{ position: "relative" }}>
+        </div>
+        <div style={styles.toolbarRight}>
           <button
             onClick={() => setSettingsOpen((o) => !o)}
             style={{
@@ -615,10 +618,10 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               </div>
             </div>
           )}
-        </div>
         <button style={styles.compute} onClick={handleCompute}>
           Compute
         </button>
+        </div>
       </div>
 
       {/* ── Agreement strip ─────────────────────────────────────────── */}
@@ -712,28 +715,30 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
                   ? "no scene-shift data — re-run Compute to populate it"
                   : "scene shift · window-centroid cosine distance"}
               </span>
-              <span style={legendStyle(T)}>
+              <span style={legendStyle(T)} title={brainA ?? ""}>
                 <span
                   style={{
                     width: 10,
                     height: 2,
                     background: T.a,
                     display: "inline-block",
+                    flex: "none",
                   }}
                 />
-                {brainA}
+                <span style={clampName}>{brainA}</span>
               </span>
               {sceneB && (
-                <span style={legendStyle(T)}>
+                <span style={legendStyle(T)} title={brainB ?? ""}>
                   <span
                     style={{
                       width: 10,
                       height: 2,
                       background: T.b,
                       display: "inline-block",
+                      flex: "none",
                     }}
                   />
-                  {brainB}
+                  <span style={clampName}>{brainB}</span>
                 </span>
               )}
               <span style={{ flex: 1 }} />
@@ -772,7 +777,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               </span>
               <span style={{ fontSize: T.fsSm, color: T.textDim }}>
                 2-D projection ·{" "}
-                <span style={{ fontFamily: T.mono }}>{trajSceneKey}</span> ·
+                <span style={{ fontFamily: T.mono, ...clampName, verticalAlign: "bottom" }} title={trajSceneKey ?? ""}>{trajSceneKey}</span> ·
                 trail = last {win} fr · red rings = jumps
               </span>
               <span style={{ flex: 1 }} />
@@ -898,6 +903,14 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
   );
 }
 
+const clampName: React.CSSProperties = {
+  display: "inline-block",
+  maxWidth: 150,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
 const legendStyle = (T: Tokens): React.CSSProperties => ({
   display: "inline-flex",
   alignItems: "center",
@@ -992,11 +1005,26 @@ const makeStyles = (T: Tokens): Record<string, React.CSSProperties> => ({
   },
   toolbar: {
     display: "flex",
-    alignItems: "center",
-    flexWrap: "wrap",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
     gap: 12,
     padding: "11px 16px",
     borderBottom: `1px solid ${T.border}`,
+  },
+  toolbarLeft: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 12,
+    minWidth: 0,
+    flex: 1,
+  },
+  toolbarRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    flex: "none",
+    position: "relative",
   },
   modelPick: {
     display: "flex",
@@ -1014,9 +1042,10 @@ const makeStyles = (T: Tokens): Record<string, React.CSSProperties> => ({
   settings: {
     position: "absolute",
     right: 0,
-    top: 36,
+    top: 38,
     zIndex: 40,
     width: 264,
+    maxWidth: "calc(100vw - 24px)",
     background: T.bgRaised,
     border: `1px solid ${T.borderHi}`,
     borderRadius: 9,
