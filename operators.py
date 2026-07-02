@@ -211,7 +211,8 @@ class ComputeTrajectoryEmbeddings(foo.Operator):
                 "scene_shift(t) = cosine_distance(mean(emb[t-W:t]), "
                 "mean(emb[t:t+W])). At 60fps, W=30 ≈ 0.5s before/after; "
                 "smaller W = sharper boundaries, larger W = smoother "
-                "segmentation."
+                "segmentation. Automatically clamped to ¼ of each clip's "
+                "length so short clips still get scores."
             ),
             required=False,
         )
@@ -414,6 +415,7 @@ class ComputeTrajectoryEmbeddings(foo.Operator):
         per_sample_frame_ids = []
         per_sample_jumps = []
         per_sample_shifts = []
+        n_clamped = 0
 
         for sid, idxs in groups.items():
             # Sort by frame number to ensure correct sequence.
@@ -435,7 +437,16 @@ class ComputeTrajectoryEmbeddings(foo.Operator):
 
             # Windowed centroid shift — catches gradual scene transitions
             # (tunnel entry/exit) that per-step distance misses.
-            shifts = _windowed_centroid_shift(normed, scene_window).tolist()
+            #
+            # Clamp W to the clip length: scene_shift(t) needs W frames of
+            # context on each side, so W ≥ n/2 zeroes the whole clip (the
+            # "empty Scenes tab" failure mode) and W > n/4 leaves most of
+            # it unscored. Capping at n//4 guarantees at least ~half the
+            # frames get a meaningful score on short clips.
+            w_eff = min(scene_window, max(2, len(normed) // 4))
+            if w_eff < scene_window:
+                n_clamped += 1
+            shifts = _windowed_centroid_shift(normed, w_eff).tolist()
 
             sample_id_order.append(sid)
             per_sample_frame_ids.append([frame_ids[i] for i in idxs])
@@ -462,6 +473,15 @@ class ComputeTrajectoryEmbeddings(foo.Operator):
         _write_field(jump_field, per_sample_jumps)
         _write_field(scene_field, per_sample_shifts)
         dataset.save()
+
+        if n_clamped:
+            ctx.ops.notify(
+                f"Scene-shift window W={scene_window} was clamped on "
+                f"{n_clamped} clip(s) shorter than {4 * scene_window} "
+                f"frames (W is capped at ¼ of clip length so short clips "
+                f"still get scene-shift scores).",
+                variant="warning",
+            )
 
         ctx.ops.notify(
             f"Computed trajectory for {len(sample_id_order)} scene(s) "
