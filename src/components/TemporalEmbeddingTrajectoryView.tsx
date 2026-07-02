@@ -363,8 +363,9 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
               margin: 0,
             }}
           >
-            Compute runs as a delegated operator; on a large dataset it can
-            take a few minutes.
+            Once the compute run finishes, open a video sample and add the
+            Temporal Embedding Trajectory panel in the modal to explore the
+            results.
           </p>
           <button style={styles.compute} onClick={handleCompute}>
             Compute
