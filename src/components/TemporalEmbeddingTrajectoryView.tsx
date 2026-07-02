@@ -1,5 +1,10 @@
-import React, { Suspense, useCallback, useMemo } from "react";
-import Plot from "react-plotly.js";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { usePanelContext, usePanelStatePartial } from "@fiftyone/spaces";
 
 import { useTrajectoryData } from "../hooks/useTrajectoryData";
@@ -7,159 +12,69 @@ import { useFrameSync } from "../hooks/useFrameSync";
 import { useCompareData } from "../hooks/useCompareData";
 import { useFrameMedia } from "../hooks/useFrameMedia";
 import {
-  buildStaticTraces,
-  buildDynamicTraces,
-  defaultJumpThreshold,
-  findCursorIndex,
-} from "../plot/buildTraces";
-import { buildCompareTraces, compareLayout } from "../plot/buildCompareTraces";
-import {
-  buildScenesTraces,
-  scenesFromBoundaries,
-  scenesLayout,
-} from "../plot/buildScenesTraces";
-import {
-  buildSegmentScatterTraces,
-  segmentScatterLayout,
-} from "../plot/buildSegmentScatterTraces";
-import { trajectoryConfig, trajectoryLayout } from "../plot/trajectoryLayout";
-import JumpFrames, { JumpFrame } from "./JumpFrames";
-import type { SceneTrajectory, TrajectoryViewProps, ViewMode } from "../types";
+  COLOR_A,
+  COLOR_B,
+  detectPeaks,
+  indexOfFrame,
+  matchPeaks,
+  sceneAssignment,
+  stats,
+} from "../utils/analysis";
+import type { MatchResult, Peak } from "../utils/analysis";
+import TimelineChart, { TimelineSeries } from "./TimelineChart";
+import TrajectoryChart from "./TrajectoryChart";
+import AlignmentBand from "./AlignmentBand";
+import BoundariesRail, { BoundaryFilter, BoundaryItem } from "./BoundariesRail";
+import Filmstrip, { FilmFrame } from "./Filmstrip";
+import { T, segBtn, segWrap, selectStyle } from "./ui";
+import type { SceneTrajectory, TrajectoryViewProps } from "../types";
 
-const TRAJECTORY_LENGTH_DEFAULT = 30;
-const JUMP_SIGMA_DEFAULT = 2;
-const CONTEXT_HALF_DEFAULT = 2; // +/- frames around the selected frame
-const LOW_VARIATION_CV = 0.3; // coefficient-of-variation threshold for the noise-hint banner
-const SEGMENT_MIN_PEAK_DIST = 30; // min frame gap between scene boundaries (matches Scenes tab)
+type ViewKind = "timeline" | "trajectory";
+type MetricKind = "scene" | "jump";
 
-const ACCENT_A = "rgba(70, 140, 220, 0.95)";
-const ACCENT_B = "rgba(230, 130, 50, 0.95)";
-const ACCENT_BOTH = "rgba(80, 200, 140, 0.95)";
-const ACCENT_SELECTED = "rgba(255, 220, 80, 1)";
+const zerosLike = (s: SceneTrajectory) =>
+  new Array(s.frame_numbers.length).fill(0);
 
-function jumpsForScene(scene: SceneTrajectory, sigma: number): JumpFrame[] {
-  const threshold = defaultJumpThreshold(scene.jump_dists, sigma);
-  const out: JumpFrame[] = [];
-  for (let i = 0; i < scene.jump_dists.length; i++) {
-    if (scene.jump_dists[i] >= threshold && threshold > 0) {
-      out.push({
-        frameId: scene.frame_ids[i],
-        frameNumber: scene.frame_numbers[i],
-        score: scene.jump_dists[i],
-      });
-    }
-  }
-  return out;
+function metricValues(s: SceneTrajectory, metric: MetricKind): number[] {
+  if (metric === "jump") return s.jump_dists ?? zerosLike(s);
+  const v = s.scene_shifts;
+  return v && v.length === s.frame_numbers.length ? v : zerosLike(s);
 }
-
-/**
- * Context frames around the user-selected frame: [center-N, ..., center, ..., center+N].
- * The center frame carries a yellow accent so the eye finds it instantly.
- */
-function contextFramesFor(
-  selectedFrame: number | null,
-  sourceScene: SceneTrajectory | undefined,
-  half: number
-): JumpFrame[] {
-  if (selectedFrame == null || !sourceScene) return [];
-  const idx = sourceScene.frame_numbers.indexOf(selectedFrame);
-  if (idx === -1) return [];
-  const start = Math.max(0, idx - half);
-  const end = Math.min(sourceScene.frame_numbers.length, idx + half + 1);
-  const out: JumpFrame[] = [];
-  for (let i = start; i < end; i++) {
-    out.push({
-      frameId: sourceScene.frame_ids[i],
-      frameNumber: sourceScene.frame_numbers[i],
-      score: sourceScene.jump_dists[i],
-      accent: i === idx ? ACCENT_SELECTED : undefined,
-    });
-  }
-  return out;
-}
-
-/**
- * Coefficient of variation of the jump_dist distribution for a scene.
- * Used to flag "low variation" scenes where per-frame jumps are dominated
- * by embedding noise rather than real signal.
- */
-function jumpDistCV(scene: SceneTrajectory | undefined): number | null {
-  if (!scene) return null;
-  const nonZero = scene.jump_dists.filter((d) => d > 0);
-  if (nonZero.length < 5) return null;
-  const mean = nonZero.reduce((a, b) => a + b, 0) / nonZero.length;
-  if (mean === 0) return null;
-  const variance =
-    nonZero.reduce((a, b) => a + (b - mean) ** 2, 0) / nonZero.length;
-  return Math.sqrt(variance) / mean;
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Compute action: shared between grid CTA and modal toolbar.
-// All compute params (model, brain key, method, ...) are configured
-// in the operator's own prompt dialog, so the panel just exposes the
-// trigger.
-// ──────────────────────────────────────────────────────────────────────
-
-type ComputeBarProps = {
-  onCompute: () => void;
-};
-
-function ComputeBar({ onCompute }: ComputeBarProps) {
-  return (
-    <button style={styles.button} onClick={onCompute}>
-      Compute
-    </button>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Main panel body.
-// ──────────────────────────────────────────────────────────────────────
 
 function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
   // ── Panel state ────────────────────────────────────────────────────
-  const [viewMode, setViewMode] = usePanelStatePartial<ViewMode>(
-    "viewMode",
-    "scatter",
+  const [view, setView] = usePanelStatePartial<ViewKind>(
+    "viewMode2",
+    "timeline",
     true
   );
-  const [selectedBrainKey, setSelectedBrainKey] = usePanelStatePartial<
-    string | null
-  >("selectedBrainKey", null, true);
-  const [keyA, setKeyA] = usePanelStatePartial<string | null>(
-    "compareKeyA",
+  const [metric, setMetric] = usePanelStatePartial<MetricKind>(
+    "metric",
+    "scene",
+    true
+  );
+  const [compare, setCompare] = usePanelStatePartial<boolean>(
+    "compareOn",
+    false,
+    true
+  );
+  const [brainA, setBrainA] = usePanelStatePartial<string | null>(
+    "selectedBrainKey",
     null,
     true
   );
-  const [keyB, setKeyB] = usePanelStatePartial<string | null>(
+  const [brainB, setBrainB] = usePanelStatePartial<string | null>(
     "compareKeyB",
     null,
     true
   );
-  const [trajectoryLength, setTrajectoryLength] = usePanelStatePartial<number>(
+  const [sigma, setSigma] = usePanelStatePartial<number>("sceneSigma", 2, true);
+  const [sigmaJ, setSigmaJ] = usePanelStatePartial<number>("jumpSigma", 2, true);
+  const [tol, setTol] = usePanelStatePartial<number>("matchTolerance", 3, true);
+  const [ctx, setCtx] = usePanelStatePartial<number>("contextHalf", 2, true);
+  const [win, setWin] = usePanelStatePartial<number>(
     "trajectoryLength",
-    TRAJECTORY_LENGTH_DEFAULT,
-    true
-  );
-  const [jumpSigma, setJumpSigma] = usePanelStatePartial<number>(
-    "jumpSigma",
-    JUMP_SIGMA_DEFAULT,
-    true
-  );
-  const [matchTolerance, setMatchTolerance] = usePanelStatePartial<number>(
-    "matchTolerance",
-    0,
-    true
-  );
-  const [sceneSigma, setSceneSigma] = usePanelStatePartial<number>(
-    "sceneSigma",
-    1.5,
-    true
-  );
-  const [contextHalf, setContextHalf] = usePanelStatePartial<number>(
-    "contextHalf",
-    CONTEXT_HALF_DEFAULT,
+    120,
     true
   );
   const [selectedFrame, setSelectedFrame] = usePanelStatePartial<number | null>(
@@ -167,755 +82,849 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
     null,
     true
   );
+  const [filter, setFilter] = usePanelStatePartial<BoundaryFilter>(
+    "boundaryFilter",
+    "all",
+    true
+  );
+  const [trajModel, setTrajModel] = usePanelStatePartial<"A" | "B">(
+    "trajModel",
+    "A",
+    true
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // ── Data hooks ─────────────────────────────────────────────────────
+  // ── Data ───────────────────────────────────────────────────────────
   const { brainKeys, scene, triggers, currentSampleId } = useTrajectoryData(
     props,
-    [selectedBrainKey, setSelectedBrainKey]
+    [brainA, setBrainA]
   );
   const { currentFrame, seekFrame, isTimelineActive } = useFrameSync();
 
-  // Seed compare keys on first availability.
-  React.useEffect(() => {
-    if (brainKeys.length === 0) return;
-    if (!keyA && selectedBrainKey) setKeyA(selectedBrainKey);
-    if (!keyB) {
-      const candidate = brainKeys.find(
-        (bk) => bk.key !== (keyA || selectedBrainKey)
-      );
-      if (candidate) setKeyB(candidate.key);
+  // Seed B with a different key once available.
+  useEffect(() => {
+    if (!brainB && brainKeys.length > 1) {
+      const candidate = brainKeys.find((bk) => bk.key !== brainA);
+      if (candidate) setBrainB(candidate.key);
     }
-  }, [brainKeys, selectedBrainKey, keyA, keyB, setKeyA, setKeyB]);
+  }, [brainKeys, brainA, brainB, setBrainB]);
 
-  const compareKeysSel = useMemo(
-    () => [keyA, keyB].filter((k): k is string => !!k),
-    [keyA, keyB]
+  const compareKeys = useMemo(
+    () =>
+      [brainA, compare ? brainB : null].filter((k): k is string => !!k),
+    [brainA, brainB, compare]
   );
   const { scenes: compareScenes } = useCompareData(
     props,
     currentSampleId,
-    viewMode === "compare" || viewMode === "scenes" ? compareKeysSel : []
+    compareKeys
   );
 
-  // ── Scatter derived state ──────────────────────────────────────────
-  const jumpThreshold = useMemo(
-    () => (scene ? defaultJumpThreshold(scene.jump_dists, jumpSigma ?? 2) : 0),
-    [scene, jumpSigma]
+  const sceneA: SceneTrajectory | null =
+    (brainA ? compareScenes[brainA] : null) ?? scene ?? null;
+  const sceneB: SceneTrajectory | null =
+    compare && brainB && brainB !== brainA
+      ? compareScenes[brainB] ?? null
+      : null;
+
+  // ── Analysis (active metric drives timeline/band/rail) ─────────────
+  const jm = metric === "jump";
+  const activeSigma = (jm ? sigmaJ : sigma) ?? 2;
+  const setActiveSigma = jm ? setSigmaJ : setSigma;
+
+  const valsA = useMemo(
+    () => (sceneA ? metricValues(sceneA, metric ?? "scene") : []),
+    [sceneA, metric]
   );
-  // Split static (base + jumps) from dynamic (trajectory + cursor) so the
-  // heavy base trace keeps a stable reference across playback frames —
-  // Plotly.react then skips re-drawing it and only the small dynamic
-  // traces update, keeping the cursor moving smoothly. Order is
-  // [base, jumps, trajectory, cursor] so the yellow cursor draws last/on top.
-  const scatterStatic = useMemo(
+  const valsB = useMemo(
+    () => (sceneB ? metricValues(sceneB, metric ?? "scene") : []),
+    [sceneB, metric]
+  );
+  const statsA = useMemo(() => stats(valsA), [valsA]);
+  const statsB = useMemo(() => stats(valsB), [valsB]);
+  const peaksA = useMemo(
+    () => (sceneA ? detectPeaks(valsA, statsA, activeSigma) : []),
+    [sceneA, valsA, statsA, activeSigma]
+  );
+  const peaksB = useMemo(
+    () => (sceneB ? detectPeaks(valsB, statsB, activeSigma) : []),
+    [sceneB, valsB, statsB, activeSigma]
+  );
+  const match: MatchResult | null = useMemo(() => {
+    if (!sceneA || !sceneB) return null;
+    return matchPeaks(
+      peaksA,
+      peaksB,
+      Math.max(0, tol ?? 3),
+      (i) => sceneA.frame_numbers[i],
+      (i) => sceneB.frame_numbers[i]
+    );
+  }, [sceneA, sceneB, peaksA, peaksB, tol]);
+
+  const matchedA = useMemo(
+    () => new Set<Peak>((match?.pairs ?? []).map((p) => p.a)),
+    [match]
+  );
+  const matchedB = useMemo(
+    () => new Set<Peak>((match?.pairs ?? []).map((p) => p.b)),
+    [match]
+  );
+
+  // Scene assignment always comes from the SCENE metric of model A —
+  // used for thumbnail hues and status ("scene X of Y").
+  const scenePeaksA = useMemo(() => {
+    if (!sceneA) return [] as Peak[];
+    const v = metricValues(sceneA, "scene");
+    return detectPeaks(v, stats(v), sigma ?? 2);
+  }, [sceneA, sigma]);
+  const sceneOfA = useMemo(
     () =>
-      scene && scene.points.length > 0
-        ? buildStaticTraces(scene, { jumpThreshold })
-        : [],
-    [scene, jumpThreshold]
+      sceneA ? sceneAssignment(scenePeaksA, sceneA.frame_numbers.length) : [],
+    [sceneA, scenePeaksA]
   );
-  const scatterDynamic = useMemo(
+
+  // ── Cursor / seeking ───────────────────────────────────────────────
+  const nA = sceneA?.frame_numbers.length ?? 0;
+  const activeFrame = useMemo(() => {
+    if (currentFrame != null) return currentFrame;
+    if (selectedFrame != null) return selectedFrame;
+    return sceneA && nA > 0 ? sceneA.frame_numbers[nA - 1] : null;
+  }, [currentFrame, selectedFrame, sceneA, nA]);
+  const cursorIdxA = useMemo(
     () =>
-      scene && scene.points.length > 0
-        ? buildDynamicTraces(scene, {
-            trajectoryLength: trajectoryLength ?? TRAJECTORY_LENGTH_DEFAULT,
-            currentFrameNumber: currentFrame,
-          })
-        : [],
-    [scene, trajectoryLength, currentFrame]
-  );
-  const scatterTraces = useMemo(
-    () => [...scatterStatic, ...scatterDynamic],
-    [scatterStatic, scatterDynamic]
-  );
-  const scatterJumps = useMemo<JumpFrame[]>(
-    () => (scene ? jumpsForScene(scene, jumpSigma ?? JUMP_SIGMA_DEFAULT) : []),
-    [scene, jumpSigma]
+      sceneA && activeFrame != null
+        ? indexOfFrame(sceneA.frame_numbers, activeFrame)
+        : -1,
+    [sceneA, activeFrame]
   );
 
-  // ── Segment scatter (scatter_b) derived state ──────────────────────
-  // Same single-key scene as Scatter, but colored by scene_shift
-  // segments. Reuses the Scene σ slider for boundary sensitivity.
-  const segmentScatter = useMemo(() => {
-    if (!scene || scene.points.length === 0) {
-      return { traces: [], segments: [], numSegments: 0 };
-    }
-    return buildSegmentScatterTraces(scene, {
-      sigma: sceneSigma ?? 1.5,
-      minPeakDistance: SEGMENT_MIN_PEAK_DIST,
-      currentFrameNumber: currentFrame,
-    });
-  }, [scene, sceneSigma, currentFrame]);
-
-  // ── Compare / Scenes derived state ─────────────────────────────────
-  const sceneA = keyA ? compareScenes[keyA] : undefined;
-  const sceneB = keyB ? compareScenes[keyB] : undefined;
-
-  const compareTracesAndDomain = useMemo(() => {
-    const scenesList: Array<{ brainKey: string; scene: SceneTrajectory }> = [];
-    if (keyA && sceneA) scenesList.push({ brainKey: keyA, scene: sceneA });
-    if (keyB && sceneB) scenesList.push({ brainKey: keyB, scene: sceneB });
-    return buildCompareTraces({
-      scenes: scenesList,
-      jumpSigma: jumpSigma ?? JUMP_SIGMA_DEFAULT,
-      currentFrameNumber: currentFrame,
-    });
-  }, [keyA, keyB, sceneA, sceneB, jumpSigma, currentFrame]);
-
-  const compareDiff = useMemo(() => {
-    const sigma = jumpSigma ?? JUMP_SIGMA_DEFAULT;
-    const tol = Math.max(0, Math.floor(matchTolerance ?? 0));
-    const aJumps = sceneA ? jumpsForScene(sceneA, sigma) : [];
-    const bJumps = sceneB ? jumpsForScene(sceneB, sigma) : [];
-    const hasMatchIn = (target: number, others: JumpFrame[]): boolean =>
-      others.some((o) => Math.abs(o.frameNumber - target) <= tol);
-    const onlyA: JumpFrame[] = aJumps
-      .filter((j) => !hasMatchIn(j.frameNumber, bJumps))
-      .map((j) => ({ ...j, accent: ACCENT_A }));
-    const onlyB: JumpFrame[] = bJumps
-      .filter((j) => !hasMatchIn(j.frameNumber, aJumps))
-      .map((j) => ({ ...j, accent: ACCENT_B }));
-    const both: JumpFrame[] = aJumps
-      .filter((j) => hasMatchIn(j.frameNumber, bJumps))
-      .map((j) => ({ ...j, accent: ACCENT_BOTH }));
-    return { onlyA, both, onlyB };
-  }, [sceneA, sceneB, jumpSigma, matchTolerance]);
-
-  const scenesPlot = useMemo(() => {
-    const scenesList: Array<{
-      brainKey: string;
-      scene: SceneTrajectory;
-      color: string;
-    }> = [];
-    if (keyA && sceneA)
-      scenesList.push({ brainKey: keyA, scene: sceneA, color: ACCENT_A });
-    if (keyB && sceneB)
-      scenesList.push({ brainKey: keyB, scene: sceneB, color: ACCENT_B });
-    return buildScenesTraces({
-      scenes: scenesList,
-      sigma: sceneSigma ?? 1.5,
-      minPeakDistance: 30,
-      currentFrameNumber: currentFrame,
-    });
-  }, [keyA, keyB, sceneA, sceneB, sceneSigma, currentFrame]);
-  const scenesSegmentsA = useMemo(
-    () =>
-      keyA && sceneA && scenesPlot.boundariesByKey[keyA]
-        ? scenesFromBoundaries(sceneA, scenesPlot.boundariesByKey[keyA])
-        : [],
-    [keyA, sceneA, scenesPlot]
-  );
-  const scenesSegmentsB = useMemo(
-    () =>
-      keyB && sceneB && scenesPlot.boundariesByKey[keyB]
-        ? scenesFromBoundaries(sceneB, scenesPlot.boundariesByKey[keyB])
-        : [],
-    [keyB, sceneB, scenesPlot]
-  );
-
-  // ── Context preview frames around the user-selected frame ──────────
-  // Source the surrounding frames from whichever scene we currently
-  // have loaded — they're all keyed by the same parent video, so the
-  // frame_ids around `selectedFrame` are identical.
-  const contextSourceScene = sceneA ?? sceneB ?? scene ?? undefined;
-  const contextFrames = useMemo(
-    () =>
-      contextFramesFor(
-        selectedFrame ?? null,
-        contextSourceScene,
-        Math.max(1, Math.floor(contextHalf ?? CONTEXT_HALF_DEFAULT))
-      ),
-    [selectedFrame, contextSourceScene, contextHalf]
-  );
-
-  // ── Frame-media batching ───────────────────────────────────────────
-  const thumbnailFrameIds = useMemo(() => {
-    const ids: string[] = [];
-    if (viewMode === "scatter") {
-      ids.push(...scatterJumps.map((j) => j.frameId));
-    } else if (viewMode === "scatter_b") {
-      ids.push(...segmentScatter.segments.map((s) => s.frameId));
-    } else if (viewMode === "compare") {
-      ids.push(
-        ...[
-          ...compareDiff.onlyA,
-          ...compareDiff.both,
-          ...compareDiff.onlyB,
-        ].map((j) => j.frameId)
-      );
-    } else {
-      ids.push(...scenesSegmentsA.map((s) => s.frameId));
-      ids.push(...scenesSegmentsB.map((s) => s.frameId));
-    }
-    // Always include the context-preview frames so they show as soon
-    // as the user clicks anywhere.
-    ids.push(...contextFrames.map((f) => f.frameId));
-    return ids;
-  }, [
-    viewMode,
-    scatterJumps,
-    segmentScatter,
-    compareDiff,
-    scenesSegmentsA,
-    scenesSegmentsB,
-    contextFrames,
-  ]);
-  const { media: frameMedia } = useFrameMedia(props, thumbnailFrameIds);
-
-  // ── Click handlers ─────────────────────────────────────────────────
-  const handleSelectFrame = useCallback(
+  const handleSeek = useCallback(
     (frameNumber: number) => {
       setSelectedFrame(frameNumber);
       seekFrame(frameNumber);
-    },
-    [seekFrame, setSelectedFrame]
-  );
-
-  const handlePlotClick = useCallback(
-    (event: any) => {
-      const pt = event?.points?.[0];
-      if (!pt) return;
-      let frameNumber: number | undefined;
-      const cd = pt.customdata;
-      if (Array.isArray(cd)) {
-        frameNumber = typeof cd[0] === "string" ? Number(cd[1]) : Number(cd[0]);
-      } else if (cd != null) {
-        frameNumber = Number(cd);
-      }
-      if (frameNumber == null || Number.isNaN(frameNumber)) return;
-      handleSelectFrame(frameNumber);
-
-      // Cross-sample fallback (only matters in single-key scatter modes).
-      if (
-        (viewMode === "scatter" || viewMode === "scatter_b") &&
-        scene &&
-        currentSampleId &&
-        currentSampleId !== scene.sample_id
-      ) {
+      if (sceneA && currentSampleId && currentSampleId !== sceneA.sample_id) {
         triggers.seekToFrame({
-          sample_id: scene.sample_id,
+          sample_id: sceneA.sample_id,
           frame_number: frameNumber,
         });
       }
     },
-    [viewMode, scene, handleSelectFrame, triggers, currentSampleId]
+    [seekFrame, setSelectedFrame, sceneA, currentSampleId, triggers]
   );
 
+  // ←/→ step frames (⇧ = ×10), per the design.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = (e.target as HTMLElement)?.tagName;
+      if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (!sceneA || cursorIdxA < 0) return;
+      e.preventDefault();
+      const st = (e.shiftKey ? 10 : 1) * (e.key === "ArrowLeft" ? -1 : 1);
+      const ni = Math.max(0, Math.min(nA - 1, cursorIdxA + st));
+      handleSeek(sceneA.frame_numbers[ni]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sceneA, cursorIdxA, nA, handleSeek]);
+
+  // ── Boundaries list (rail + chips) ─────────────────────────────────
+  const boundaries: BoundaryItem[] = useMemo(() => {
+    if (!sceneA) return [];
+    const thumbAt = (s: SceneTrajectory, i: number, d: number) =>
+      s.frame_ids[Math.max(0, Math.min(s.frame_numbers.length - 1, i + d))];
+    const mk = (
+      s: SceneTrajectory,
+      p: Peak,
+      kind: BoundaryItem["kind"]
+    ): BoundaryItem => ({
+      idx: p.i,
+      frame: s.frame_numbers[p.i],
+      kind,
+      value: p.v,
+      beforeId: thumbAt(s, p.i, -4),
+      afterId: thumbAt(s, p.i, +4),
+      sceneIdx: sceneOfA[Math.min(p.i, Math.max(0, sceneOfA.length - 1))] ?? 0,
+    });
+    let items: BoundaryItem[];
+    if (sceneB && match) {
+      items = [
+        ...match.pairs.map((p) => ({
+          ...mk(sceneA, p.a, "A+B" as const),
+          value: Math.max(p.a.v, p.b.v),
+        })),
+        ...match.onlyA.map((p) => mk(sceneA, p, "A")),
+        ...match.onlyB.map((p) => mk(sceneB, p, "B")),
+      ];
+    } else {
+      items = peaksA.map((p) => mk(sceneA, p, "A"));
+    }
+    return items.sort((x, y) => x.frame - y.frame);
+  }, [sceneA, sceneB, match, peaksA, sceneOfA]);
+
+  // ── Filmstrip ──────────────────────────────────────────────────────
+  const vMaxA = useMemo(() => Math.max(1e-9, ...valsA), [valsA]);
+  const film: FilmFrame[] = useMemo(() => {
+    if (!sceneA || cursorIdxA < 0) return [];
+    const half = Math.max(1, ctx ?? 2);
+    const out: FilmFrame[] = [];
+    for (let i = cursorIdxA - half; i <= cursorIdxA + half; i++) {
+      const ci = Math.max(0, Math.min(nA - 1, i));
+      out.push({
+        idx: i,
+        frame: sceneA.frame_numbers[ci],
+        frameId: sceneA.frame_ids[ci],
+        value: valsA[ci] ?? 0,
+        frac: (valsA[ci] ?? 0) / vMaxA,
+        sceneIdx: sceneOfA[ci] ?? 0,
+        isCurrent: ci === cursorIdxA,
+      });
+    }
+    return out;
+  }, [sceneA, cursorIdxA, ctx, nA, valsA, vMaxA, sceneOfA]);
+
+  // ── Frame media (thumbs for rail + filmstrip) ──────────────────────
+  const mediaIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const b of boundaries) {
+      if (b.beforeId) ids.push(b.beforeId);
+      if (b.afterId) ids.push(b.afterId);
+    }
+    for (const f of film) if (f.frameId) ids.push(f.frameId);
+    return ids;
+  }, [boundaries, film]);
+  const { media } = useFrameMedia(props, mediaIds);
+
+  // ── Trajectory view derived state ──────────────────────────────────
+  const trajScene = trajModel === "B" && sceneB ? sceneB : sceneA;
+  const trajSceneKey = trajModel === "B" && sceneB ? brainB : brainA;
+  const trajDerived = useMemo(() => {
+    if (!trajScene) return null;
+    const sv = metricValues(trajScene, "scene");
+    const jv = metricValues(trajScene, "jump");
+    const sPeaks = detectPeaks(sv, stats(sv), sigma ?? 2);
+    const jPeaks = detectPeaks(jv, stats(jv), sigmaJ ?? 2);
+    return {
+      scenePeaks: sPeaks,
+      jumpPeaks: jPeaks,
+      sceneOf: sceneAssignment(sPeaks, trajScene.frame_numbers.length),
+      cursorIdx:
+        activeFrame != null
+          ? indexOfFrame(trajScene.frame_numbers, activeFrame)
+          : -1,
+    };
+  }, [trajScene, sigma, sigmaJ, activeFrame]);
+
+  // ── Timeline series ────────────────────────────────────────────────
+  const seriesA: TimelineSeries | null = sceneA
+    ? {
+        values: valsA,
+        frames: sceneA.frame_numbers,
+        stats: statsA,
+        peaks: peaksA,
+        matched: matchedA,
+      }
+    : null;
+  const seriesB: TimelineSeries | null = sceneB
+    ? {
+        values: valsB,
+        frames: sceneB.frame_numbers,
+        stats: statsB,
+        peaks: peaksB,
+        matched: matchedB,
+      }
+    : null;
+
+  const noBrainKeys = brainKeys.length === 0;
+  const sceneShiftMissing = !jm && sceneA != null && !valsA.some((v) => v > 0);
+
   const handleCompute = useCallback(() => {
-    // No pre-filled params — the user picks model / brain key / method
-    // in the operator's prompt dialog.
     triggers.computeTrajectory({});
   }, [triggers]);
 
-  const noBrainKeys = brainKeys.length === 0;
-  const cursorIdx = scene
-    ? findCursorIndex(scene.frame_numbers, currentFrame)
-    : -1;
+  const fMin = sceneA?.frame_numbers[0] ?? 0;
+  const fMax = sceneA?.frame_numbers[Math.max(0, nA - 1)] ?? 1;
 
-  // ── Low-variation hint ─────────────────────────────────────────────
-  // When a scene's jump_dist distribution is unusually tight (small
-  // coefficient of variation), per-frame "jumps" are almost certainly
-  // statistical outliers from a steady-state scene rather than real
-  // visual events. Flag it so the user knows what they're looking at.
-  const lowVariationScene = useMemo(() => {
-    if (viewMode === "scatter") {
-      const cv = jumpDistCV(scene ?? undefined);
-      return cv != null && cv < LOW_VARIATION_CV ? cv : null;
-    }
-    if (viewMode === "compare") {
-      const a = jumpDistCV(sceneA);
-      const b = jumpDistCV(sceneB);
-      const worst = Math.min(
-        a ?? Number.POSITIVE_INFINITY,
-        b ?? Number.POSITIVE_INFINITY
-      );
-      return worst < LOW_VARIATION_CV ? worst : null;
-    }
-    return null;
-  }, [viewMode, scene, sceneA, sceneB]);
-
-  // ── Grid surface — no sample open ──────────────────────────────────
+  // ── Grid surface (no sample open) ──────────────────────────────────
   if (!currentSampleId) {
     return (
       <div style={styles.root}>
-        <div style={styles.gridCta}>
-          <p style={styles.gridCtaTitle}>
+        <div style={styles.cta}>
+          <p style={{ fontSize: 14, color: "rgba(220,220,230,.9)", margin: 0 }}>
             {noBrainKeys
               ? "Pick a model and click Compute to embed your video frames."
               : "Open a video sample in the modal to view its trajectory."}
           </p>
-          <p style={styles.hint}>
-            Compute runs as a delegated operator; on a large dataset it can take
-            a few minutes.
+          <p
+            style={{
+              color: T.textDim,
+              fontSize: 11,
+              maxWidth: 360,
+              margin: 0,
+            }}
+          >
+            Compute runs as a delegated operator; on a large dataset it can
+            take a few minutes.
           </p>
-          <ComputeBar onCompute={handleCompute} />
+          <button style={styles.compute} onClick={handleCompute}>
+            Compute
+          </button>
         </div>
       </div>
     );
   }
 
-  // ── Modal surface — full panel ─────────────────────────────────────
-  const statusLeft = (() => {
-    if (viewMode === "scatter") {
-      return scene
-        ? `${scene.points.length} frames · ${scatterJumps.length} jumps`
-        : "no scene loaded";
-    }
-    if (viewMode === "scatter_b") {
-      return scene
-        ? `${scene.points.length} frames · ${segmentScatter.numSegments} scenes`
-        : "no scene loaded";
-    }
-    if (viewMode === "compare") {
-      return `${compareDiff.onlyA.length} only A · ${compareDiff.both.length} both · ${compareDiff.onlyB.length} only B`;
-    }
-    return `${scenesSegmentsA.length} scenes (A) · ${scenesSegmentsB.length} scenes (B)`;
-  })();
+  const chipStyle = (on: boolean): React.CSSProperties => ({
+    cursor: "pointer",
+    flex: "none",
+    whiteSpace: "nowrap",
+    padding: "4px 11px",
+    borderRadius: 20,
+    border: `1px solid ${on ? T.accentSoft : T.borderHi}`,
+    background: on ? "rgba(90,141,238,.14)" : "transparent",
+    color: on ? "#cfe0ff" : T.textMuted,
+    fontFamily: T.sans,
+    fontSize: 11.5,
+    fontWeight: 600,
+  });
+
+  const cutsLabel = jm ? "jumps" : "scene cuts";
+  const statusL = sceneA
+    ? `${nA} frames · ${cutsLabel} — A ${peaksA.length}` +
+      (sceneB && match
+        ? ` · B ${peaksB.length} · matched ${match.pairs.length}`
+        : "")
+    : "no scene loaded";
+  const nScenes = scenePeaksA.length + 1;
+  const statusR =
+    activeFrame != null && cursorIdxA >= 0
+      ? `frame ${activeFrame} · scene ${(sceneOfA[cursorIdxA] ?? 0) + 1} of ${nScenes}`
+      : isTimelineActive
+      ? "waiting for timeline"
+      : "timeline inactive — open a video modal";
 
   return (
     <div style={styles.root}>
-      {/* ── Row 1: mode tabs · key selection · compute action ──────── */}
-      <div style={styles.toolbarRow}>
-        <div style={styles.modeToggle}>
-          {(["scatter", "scatter_b", "compare", "scenes"] as ViewMode[]).map(
-            (m) => (
-              <button
-                key={m}
-                onClick={() => setViewMode(m)}
-                style={{
-                  ...styles.modeButton,
-                  ...(viewMode === m ? styles.modeButtonActive : {}),
-                }}
-              >
-                {m === "scatter"
-                  ? "Scatter"
-                  : m === "scatter_b"
-                  ? "Segments"
-                  : m === "compare"
-                  ? "Compare"
-                  : "Scenes"}
-              </button>
-            )
-          )}
+      {/* ── Toolbar ─────────────────────────────────────────────────── */}
+      <div style={styles.toolbar}>
+        <div style={segWrap}>
+          <button
+            style={segBtn(view === "timeline")}
+            onClick={() => setView("timeline")}
+          >
+            Timeline
+          </button>
+          <button
+            style={segBtn(view === "trajectory")}
+            onClick={() => setView("trajectory")}
+          >
+            Trajectory
+          </button>
         </div>
-
-        {viewMode === "scatter" || viewMode === "scatter_b" ? (
-          <label style={styles.field}>
-            <span style={styles.fieldLabel}>Brain key</span>
+        <div style={styles.modelPick}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: COLOR_A,
+            }}
+          />
+          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>
+            A
+          </span>
+          <select
+            style={selectStyle}
+            value={brainA ?? ""}
+            onChange={(e) => setBrainA(e.target.value || null)}
+            disabled={noBrainKeys}
+          >
+            {noBrainKeys ? (
+              <option value="">(none — compute first)</option>
+            ) : (
+              brainKeys.map((bk) => (
+                <option key={bk.key} value={bk.key}>
+                  {bk.key}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <span style={{ fontSize: 12, color: T.textMuted }}>Compare</span>
+          <button
+            onClick={() => {
+              setCompare(!compare);
+              setFilter("all");
+              setTrajModel("A");
+            }}
+            style={{
+              cursor: "pointer",
+              width: 34,
+              height: 19,
+              borderRadius: 10,
+              border: `1px solid ${T.borderHi}`,
+              background: compare ? T.accentSoft : T.border,
+              position: "relative",
+              padding: 0,
+              transition: "background .15s",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: compare ? 16 : 2,
+                width: 13,
+                height: 13,
+                borderRadius: "50%",
+                background: "#f2f4f6",
+                transition: "left .15s",
+              }}
+            />
+          </button>
+        </div>
+        {compare && (
+          <div style={styles.modelPick}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: COLOR_B,
+              }}
+            />
+            <span
+              style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}
+            >
+              B
+            </span>
             <select
-              style={styles.select}
-              value={selectedBrainKey ?? ""}
-              onChange={(e) => setSelectedBrainKey(e.target.value || null)}
+              style={selectStyle}
+              value={brainB ?? ""}
+              onChange={(e) => setBrainB(e.target.value || null)}
               disabled={noBrainKeys}
             >
-              {noBrainKeys ? (
-                <option value="">(none — compute first)</option>
-              ) : (
-                brainKeys.map((bk) => (
-                  <option key={bk.key} value={bk.key}>
-                    {bk.key} {bk.model ? `· ${bk.model}` : ""}
-                  </option>
-                ))
-              )}
+              <option value="">—</option>
+              {brainKeys.map((bk) => (
+                <option key={bk.key} value={bk.key}>
+                  {bk.key}
+                </option>
+              ))}
             </select>
-          </label>
-        ) : (
-          <>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>
-                Model A <span style={{ color: ACCENT_A }}>●</span>
-              </span>
-              <select
-                style={styles.select}
-                value={keyA ?? ""}
-                onChange={(e) => setKeyA(e.target.value || null)}
-                disabled={noBrainKeys}
-              >
-                <option value="">—</option>
-                {brainKeys.map((bk) => (
-                  <option key={bk.key} value={bk.key}>
-                    {bk.key}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>
-                Model B <span style={{ color: ACCENT_B }}>●</span>
-              </span>
-              <select
-                style={styles.select}
-                value={keyB ?? ""}
-                onChange={(e) => setKeyB(e.target.value || null)}
-                disabled={noBrainKeys}
-              >
-                <option value="">—</option>
-                {brainKeys.map((bk) => (
-                  <option key={bk.key} value={bk.key}>
-                    {bk.key}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
+          </div>
         )}
-
-        <div style={styles.spacer} />
-
-        <ComputeBar onCompute={handleCompute} />
-      </div>
-
-      {/* ── Row 2: per-mode display controls ───────────────────────── */}
-      <div style={styles.toolbarRow}>
-        {viewMode === "scatter" && (
-          <>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>
-                Trajectory length: {trajectoryLength}
-              </span>
-              <input
-                type="range"
-                min={2}
-                max={200}
-                value={trajectoryLength ?? TRAJECTORY_LENGTH_DEFAULT}
-                onChange={(e) => setTrajectoryLength(Number(e.target.value))}
-              />
-            </label>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>Jump σ: {jumpSigma}</span>
-              <input
-                type="range"
-                min={0.5}
-                max={5}
-                step={0.1}
-                value={jumpSigma ?? JUMP_SIGMA_DEFAULT}
-                onChange={(e) => setJumpSigma(Number(e.target.value))}
-              />
-            </label>
-          </>
-        )}
-
-        {viewMode === "scatter_b" && (
-          <label style={styles.field}>
-            <span style={styles.fieldLabel}>Scene σ: {sceneSigma}</span>
-            <input
-              type="range"
-              min={0.5}
-              max={5}
-              step={0.1}
-              value={sceneSigma ?? 1.5}
-              onChange={(e) => setSceneSigma(Number(e.target.value))}
-            />
-          </label>
-        )}
-
-        {viewMode === "compare" && (
-          <>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>Jump σ: {jumpSigma}</span>
-              <input
-                type="range"
-                min={0.5}
-                max={5}
-                step={0.1}
-                value={jumpSigma ?? JUMP_SIGMA_DEFAULT}
-                onChange={(e) => setJumpSigma(Number(e.target.value))}
-              />
-            </label>
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>
-                Match tol: ±{matchTolerance ?? 0} fr
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={1}
-                value={matchTolerance ?? 0}
-                onChange={(e) => setMatchTolerance(Number(e.target.value))}
-              />
-            </label>
-          </>
-        )}
-
-        {viewMode === "scenes" && (
-          <label style={styles.field}>
-            <span style={styles.fieldLabel}>Scene σ: {sceneSigma}</span>
-            <input
-              type="range"
-              min={0.5}
-              max={5}
-              step={0.1}
-              value={sceneSigma ?? 1.5}
-              onChange={(e) => setSceneSigma(Number(e.target.value))}
-            />
-          </label>
-        )}
-
-        {/* Context window applies across modes — frame previews around
-            the user-selected frame use this radius. */}
-        <label style={styles.field}>
-          <span style={styles.fieldLabel}>
-            Context: ±{contextHalf ?? CONTEXT_HALF_DEFAULT} fr
-          </span>
-          <input
-            type="range"
-            min={1}
-            max={30}
-            step={1}
-            value={contextHalf ?? CONTEXT_HALF_DEFAULT}
-            onChange={(e) => setContextHalf(Number(e.target.value))}
-          />
-        </label>
-      </div>
-
-      {/* Low-variation hint: scene's per-frame jumps are so tightly
-          distributed that the flagged "jumps" are likely noise. */}
-      {lowVariationScene != null && (
-        <div style={styles.hintBanner}>
-          ⚠️ low frame-to-frame variation (CV={lowVariationScene.toFixed(2)}) —
-          per-frame jumps here are likely embedding noise. Try{" "}
-          <span
-            style={styles.hintBannerLink}
-            onClick={() => setViewMode("scenes")}
+        <span style={{ flex: 1 }} />
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setSettingsOpen((o) => !o)}
+            style={{
+              cursor: "pointer",
+              width: 30,
+              height: 30,
+              borderRadius: 7,
+              border: `1px solid ${settingsOpen ? T.accentSoft : T.borderHi}`,
+              background: settingsOpen ? T.bgRaised : "transparent",
+              color: T.textSoft,
+              fontSize: 14,
+            }}
+            title="Detection & display settings"
           >
-            Scenes mode
-          </span>{" "}
-          for boundary detection instead.
+            ⚙
+          </button>
+          {settingsOpen && (
+            <div style={styles.settings}>
+              <Slider
+                label="Scene σ"
+                value={sigma ?? 2}
+                min={0.5}
+                max={4}
+                step={0.05}
+                onChange={setSigma}
+              />
+              <Slider
+                label="Jump σ"
+                value={sigmaJ ?? 2}
+                min={0.5}
+                max={4}
+                step={0.05}
+                onChange={setSigmaJ}
+              />
+              <Slider
+                label="Match tolerance"
+                value={tol ?? 3}
+                min={0}
+                max={8}
+                step={1}
+                onChange={setTol}
+                fmt={(v) => `±${v} fr`}
+              />
+              <Slider
+                label="Context"
+                value={ctx ?? 2}
+                min={1}
+                max={8}
+                step={1}
+                onChange={setCtx}
+                fmt={(v) => `±${v} fr`}
+              />
+              <div>
+                <Slider
+                  label="Trail length"
+                  value={win ?? 120}
+                  min={10}
+                  max={400}
+                  step={10}
+                  onChange={setWin}
+                  fmt={(v) => `${v} fr`}
+                />
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: T.textDim,
+                    lineHeight: 1.4,
+                    marginTop: 4,
+                  }}
+                >
+                  Trajectory view only: how many recent frames are drawn
+                  colored + connected; older frames stay grey.
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <button style={styles.compute} onClick={handleCompute}>
+          Compute
+        </button>
+      </div>
+
+      {/* ── Agreement strip ─────────────────────────────────────────── */}
+      {compare && sceneB && match && (
+        <div style={styles.agreeStrip}>
+          <button
+            style={chipStyle(filter === "all")}
+            onClick={() => setFilter("all")}
+          >
+            All
+            <span style={{ fontFamily: T.mono, marginLeft: 6 }}>
+              {boundaries.length}
+            </span>
+          </button>
+          <button
+            style={chipStyle(filter === "both")}
+            onClick={() => setFilter("both")}
+          >
+            Matched
+            <span style={{ fontFamily: T.mono, marginLeft: 6 }}>
+              {match.pairs.length}
+            </span>
+          </button>
+          <button
+            style={chipStyle(filter === "A")}
+            onClick={() => setFilter("A")}
+          >
+            Only A
+            <span style={{ fontFamily: T.mono, marginLeft: 6 }}>
+              {match.onlyA.length}
+            </span>
+          </button>
+          <button
+            style={chipStyle(filter === "B")}
+            onClick={() => setFilter("B")}
+          >
+            Only B
+            <span style={{ fontFamily: T.mono, marginLeft: 6 }}>
+              {match.onlyB.length}
+            </span>
+          </button>
+          <span style={{ flex: 1 }} />
+          <span
+            style={{ fontSize: 10.5, color: T.textDim, whiteSpace: "nowrap" }}
+          >
+            observed at σ {activeSigma.toFixed(2)} · chips highlight, don't hide
+          </span>
         </div>
       )}
 
-      {/* ── Plot area ──────────────────────────────────────────────── */}
-      <div style={styles.plotWrap}>
-        {viewMode === "scatter" ? (
-          scatterTraces.length === 0 ? (
-            <div style={styles.empty}>
-              {noBrainKeys ? (
-                <p>Compute a brain key first.</p>
-              ) : (
-                <p>
-                  No embeddings found for this scene under "{selectedBrainKey}".
-                </p>
-              )}
-            </div>
-          ) : (
-            <Plot
-              data={scatterTraces as any}
-              layout={trajectoryLayout()}
-              config={trajectoryConfig as any}
-              useResizeHandler
-              style={{ width: "100%", height: "100%" }}
-              onClick={handlePlotClick}
-            />
-          )
-        ) : viewMode === "scatter_b" ? (
-          segmentScatter.traces.length === 0 ? (
-            <div style={styles.empty}>
-              {noBrainKeys ? (
-                <p>Compute a brain key first.</p>
-              ) : scene &&
-                !(scene.scene_shifts && scene.scene_shifts.length) ? (
-                <p>
-                  No scene-shift data for "{selectedBrainKey}" — re-run Compute
-                  to populate the <code>_scene_shift</code> field.
-                </p>
-              ) : (
-                <p>
-                  No embeddings found for this scene under "{selectedBrainKey}".
-                </p>
-              )}
-            </div>
-          ) : (
-            <Plot
-              data={segmentScatter.traces as any}
-              layout={segmentScatterLayout()}
-              config={trajectoryConfig as any}
-              useResizeHandler
-              style={{ width: "100%", height: "100%" }}
-              onClick={handlePlotClick}
-            />
-          )
-        ) : viewMode === "compare" ? (
-          compareTracesAndDomain.traces.length === 0 ? (
-            <div style={styles.empty}>
-              {noBrainKeys ? (
-                <p>Compute at least one brain key first.</p>
-              ) : !keyA && !keyB ? (
-                <p>Pick brain keys for Model A and Model B.</p>
-              ) : (
-                <p>Loading compare data…</p>
-              )}
-            </div>
-          ) : (
-            <Plot
-              data={compareTracesAndDomain.traces as any}
-              layout={
-                compareLayout(
-                  compareTracesAndDomain.domain,
-                  currentFrame
-                ) as any
-              }
-              config={trajectoryConfig as any}
-              useResizeHandler
-              style={{ width: "100%", height: "100%" }}
-              onClick={handlePlotClick}
-            />
-          )
-        ) : scenesPlot.traces.length === 0 ? (
+      {/* ── Scrollable body ─────────────────────────────────────────── */}
+      <div style={styles.body}>
+        {!sceneA ? (
           <div style={styles.empty}>
             {noBrainKeys ? (
-              <p>Compute at least one brain key first.</p>
-            ) : !keyA && !keyB ? (
-              <p>Pick brain keys for Model A and Model B.</p>
-            ) : (sceneA &&
-                !(sceneA.scene_shifts && sceneA.scene_shifts.length)) ||
-              (sceneB &&
-                !(sceneB.scene_shifts && sceneB.scene_shifts.length)) ? (
-              <p>
-                No scene-shift data for this brain key — re-run Compute to
-                populate the <code>_scene_shift</code> field.
-              </p>
+              <p>Compute a brain key first.</p>
             ) : (
-              <p>Loading scenes data…</p>
+              <p>No embeddings found for this scene under "{brainA}".</p>
+            )}
+          </div>
+        ) : view === "timeline" ? (
+          <div
+            style={{
+              padding: "13px 16px 6px",
+              borderBottom: `1px solid ${T.border}`,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 4,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ ...segWrap, borderRadius: 7, padding: 2 }}>
+                <button style={segBtn(!jm)} onClick={() => setMetric("scene")}>
+                  Scene shift
+                </button>
+                <button style={segBtn(jm)} onClick={() => setMetric("jump")}>
+                  Jump
+                </button>
+              </div>
+              <span
+                style={{ fontSize: 11, color: T.textDim, whiteSpace: "nowrap" }}
+              >
+                {jm
+                  ? "jump · frame-to-frame cosine distance"
+                  : sceneShiftMissing
+                  ? "no scene-shift data — re-run Compute to populate it"
+                  : "scene shift · window-centroid cosine distance"}
+              </span>
+              <span style={legendStyle}>
+                <span
+                  style={{
+                    width: 10,
+                    height: 2,
+                    background: COLOR_A,
+                    display: "inline-block",
+                  }}
+                />
+                {brainA}
+              </span>
+              {sceneB && (
+                <span style={legendStyle}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 2,
+                      background: COLOR_B,
+                      display: "inline-block",
+                    }}
+                  />
+                  {brainB}
+                </span>
+              )}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 10.5, color: T.textDim }}>
+                drag ┄ to set σ · click to seek · ←→ step
+              </span>
+            </div>
+            {seriesA && (
+              <TimelineChart
+                a={seriesA}
+                b={seriesB}
+                sigma={activeSigma}
+                cursorFrame={activeFrame}
+                onSeek={handleSeek}
+                onSigma={setActiveSigma}
+              />
             )}
           </div>
         ) : (
-          <Plot
-            data={scenesPlot.traces as any}
-            layout={scenesLayout(scenesPlot.domain, currentFrame) as any}
-            config={trajectoryConfig as any}
-            useResizeHandler
-            style={{ width: "100%", height: "100%" }}
-            onClick={handlePlotClick}
+          <div
+            style={{
+              padding: "13px 16px 8px",
+              borderBottom: `1px solid ${T.border}`,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 4,
+              }}
+            >
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>
+                Embedding trajectory
+              </span>
+              <span style={{ fontSize: 11, color: T.textDim }}>
+                2-D projection ·{" "}
+                <span style={{ fontFamily: T.mono }}>{trajSceneKey}</span> ·
+                trail = last {win} fr · red rings = jumps
+              </span>
+              <span style={{ flex: 1 }} />
+              {compare && sceneB && (
+                <div style={{ ...segWrap, borderRadius: 7, padding: 2 }}>
+                  <button
+                    style={segBtn(trajModel === "A")}
+                    onClick={() => setTrajModel("A")}
+                  >
+                    A
+                  </button>
+                  <button
+                    style={segBtn(trajModel === "B")}
+                    onClick={() => setTrajModel("B")}
+                  >
+                    B
+                  </button>
+                </div>
+              )}
+            </div>
+            {trajScene && trajDerived && (
+              <TrajectoryChart
+                points={trajScene.points}
+                frames={trajScene.frame_numbers}
+                sceneOf={trajDerived.sceneOf}
+                scenePeaks={trajDerived.scenePeaks}
+                jumpPeaks={trajDerived.jumpPeaks}
+                cursorIdx={trajDerived.cursorIdx}
+                win={win ?? 120}
+                onSeek={handleSeek}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── Alignment band ───────────────────────────────────────── */}
+        {sceneA && (
+          <div
+            style={{
+              padding: "10px 16px 6px",
+              borderBottom: `1px solid ${T.border}`,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: T.text,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {jm ? "Segments between jumps" : "Scenes"}
+              </span>
+              {sceneB && (
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    color: T.textDim,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    minWidth: 0,
+                  }}
+                >
+                  connected notches = boundaries matched within ±{tol} fr ·
+                  dangling = unmatched
+                </span>
+              )}
+              <span style={{ flex: 1 }} />
+              <span
+                style={{
+                  fontSize: 10.5,
+                  color: T.textDim,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                cuts at σ {activeSigma.toFixed(2)}
+              </span>
+            </div>
+            <AlignmentBand
+              a={{ frames: sceneA.frame_numbers, peaks: peaksA }}
+              b={sceneB ? { frames: sceneB.frame_numbers, peaks: peaksB } : null}
+              match={match}
+              neutral={jm}
+              cursorFrame={activeFrame}
+              fMin={fMin}
+              fMax={fMax}
+            />
+          </div>
+        )}
+
+        {/* ── Boundaries rail ──────────────────────────────────────── */}
+        {sceneA && (
+          <BoundariesRail
+            label={jm ? "Jump frames" : "Boundaries"}
+            items={boundaries}
+            filter={filter ?? "all"}
+            selectedFrame={selectedFrame ?? null}
+            media={media}
+            onSeek={handleSeek}
+          />
+        )}
+
+        {/* ── Context filmstrip ────────────────────────────────────── */}
+        {sceneA && film.length > 0 && (
+          <Filmstrip
+            frames={film}
+            centerFrame={activeFrame ?? 0}
+            ctx={ctx ?? 2}
+            media={media}
+            onSeek={handleSeek}
           />
         )}
       </div>
 
-      {/* ── Thumbnails area ────────────────────────────────────────── */}
-      <div style={styles.thumbsArea}>
-        {viewMode === "scatter" ? (
-          scene && scatterJumps.length > 0 ? (
-            <JumpFrames
-              title="jump frames"
-              frames={scatterJumps}
-              media={frameMedia}
-              onClickFrame={handleSelectFrame}
-            />
-          ) : null
-        ) : viewMode === "scatter_b" ? (
-          scene && segmentScatter.segments.length > 0 ? (
-            <JumpFrames
-              title="scene starts"
-              frames={segmentScatter.segments.map((s) => ({
-                frameId: s.frameId,
-                frameNumber: s.frameNumber,
-                accent: s.color,
-              }))}
-              media={frameMedia}
-              onClickFrame={handleSelectFrame}
-            />
-          ) : null
-        ) : viewMode === "compare" ? (
-          keyA || keyB ? (
-            <div style={styles.diffRow}>
-              {keyA ? (
-                <div style={styles.diffCol}>
-                  <JumpFrames
-                    title={`only ${keyA}`}
-                    frames={compareDiff.onlyA}
-                    media={frameMedia}
-                    onClickFrame={handleSelectFrame}
-                  />
-                </div>
-              ) : null}
-              <div style={styles.diffCol}>
-                <JumpFrames
-                  title="both"
-                  frames={compareDiff.both}
-                  media={frameMedia}
-                  onClickFrame={handleSelectFrame}
-                />
-              </div>
-              {keyB ? (
-                <div style={styles.diffCol}>
-                  <JumpFrames
-                    title={`only ${keyB}`}
-                    frames={compareDiff.onlyB}
-                    media={frameMedia}
-                    onClickFrame={handleSelectFrame}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : null
-        ) : (
-          <div
-            style={
-              keyA && keyB
-                ? { ...styles.diffRow, gridTemplateColumns: "1fr 1fr" }
-                : styles.diffRow
-            }
-          >
-            {keyA && scenesSegmentsA.length > 0 ? (
-              <div style={styles.diffCol}>
-                <JumpFrames
-                  title={`${keyA} scenes`}
-                  frames={scenesSegmentsA.map((s) => ({
-                    frameId: s.frameId,
-                    frameNumber: s.startFrame,
-                    accent: ACCENT_A,
-                  }))}
-                  media={frameMedia}
-                  onClickFrame={handleSelectFrame}
-                />
-              </div>
-            ) : null}
-            {keyB && scenesSegmentsB.length > 0 ? (
-              <div style={styles.diffCol}>
-                <JumpFrames
-                  title={`${keyB} scenes`}
-                  frames={scenesSegmentsB.map((s) => ({
-                    frameId: s.frameId,
-                    frameNumber: s.startFrame,
-                    accent: ACCENT_B,
-                  }))}
-                  media={frameMedia}
-                  onClickFrame={handleSelectFrame}
-                />
-              </div>
-            ) : null}
-          </div>
-        )}
-
-        {/* Context preview: ±N frames around the currently selected frame */}
-        {contextFrames.length > 0 ? (
-          <div style={styles.contextPreview}>
-            <JumpFrames
-              title={`context · frame ${selectedFrame}`}
-              frames={contextFrames}
-              media={frameMedia}
-              onClickFrame={handleSelectFrame}
-              thumbSize={140}
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {/* ── Status bar ─────────────────────────────────────────────── */}
+      {/* ── Status bar ──────────────────────────────────────────────── */}
       <div style={styles.status}>
-        <span>{statusLeft}</span>
-        <span>
-          {currentFrame != null
-            ? `current frame: ${currentFrame}${
-                viewMode === "scatter" && cursorIdx >= 0
-                  ? ` (idx ${cursorIdx})`
-                  : ""
-              }`
-            : isTimelineActive
-            ? "waiting for timeline"
-            : "timeline inactive — open a video modal"}
+        <span>{statusL}</span>
+        <span>{statusR}</span>
+      </div>
+    </div>
+  );
+}
+
+const legendStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  fontFamily: T.mono,
+  fontSize: 10.5,
+  color: T.textMuted,
+};
+
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  fmt,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  fmt?: (v: number) => string;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 11.5,
+          color: T.textSoft,
+        }}
+      >
+        <span>{label}</span>
+        <span style={{ fontFamily: T.mono, color: T.text }}>
+          {fmt ? fmt(value) : value}
         </span>
       </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: T.accentSoft }}
+      />
     </div>
   );
 }
@@ -945,108 +954,62 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     height: "100%",
     minHeight: 0,
-    background: "transparent",
-    color: "rgba(220,220,220,0.92)",
-    fontFamily:
-      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    background: T.bg,
+    color: T.text,
+    fontFamily: T.sans,
   },
-  toolbarRow: {
+  toolbar: {
     display: "flex",
+    alignItems: "center",
     flexWrap: "wrap",
     gap: 12,
-    padding: "6px 12px",
-    borderBottom: "1px solid rgba(120,120,140,0.18)",
-    alignItems: "flex-end",
+    padding: "11px 16px",
+    borderBottom: `1px solid ${T.border}`,
   },
-  spacer: {
-    flex: 1,
+  modelPick: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
   },
-  field: {
+  agreeStrip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "9px 16px",
+    borderBottom: `1px solid ${T.border}`,
+    background: T.bgSub,
+  },
+  settings: {
+    position: "absolute",
+    right: 0,
+    top: 36,
+    zIndex: 40,
+    width: 264,
+    background: T.bgRaised,
+    border: "1px solid #2e3338",
+    borderRadius: 9,
+    padding: 14,
+    boxShadow: "0 14px 34px rgba(0,0,0,.5)",
     display: "flex",
     flexDirection: "column",
-    gap: 4,
-    minWidth: 140,
+    gap: 12,
   },
-  fieldLabel: {
-    fontSize: 11,
-    color: "rgba(180,180,200,0.85)",
-  },
-  select: {
-    background: "rgba(40,40,55,0.7)",
-    color: "inherit",
-    border: "1px solid rgba(120,120,150,0.25)",
-    borderRadius: 4,
-    padding: "4px 6px",
-    fontSize: 12,
-  },
-  modeToggle: {
-    display: "flex",
-    border: "1px solid rgba(120,120,150,0.25)",
-    borderRadius: 4,
-    overflow: "hidden",
-    alignSelf: "flex-end",
-  },
-  modeButton: {
-    background: "rgba(40,40,55,0.4)",
-    color: "rgba(220,220,220,0.85)",
-    border: "none",
-    padding: "6px 14px",
-    fontSize: 12,
+  compute: {
     cursor: "pointer",
-    minWidth: 80,
-  },
-  modeButtonActive: {
-    background: "rgba(70,140,220,0.85)",
-    color: "white",
-  },
-  button: {
-    background: "rgba(70,140,220,0.85)",
-    color: "white",
+    padding: "7px 18px",
+    borderRadius: 7,
     border: "none",
-    borderRadius: 4,
-    padding: "6px 14px",
-    fontSize: 12,
-    cursor: "pointer",
-    alignSelf: "flex-end",
+    background: T.accent,
+    color: "#fff",
+    fontFamily: T.sans,
+    fontWeight: 600,
+    fontSize: 12.5,
+    letterSpacing: ".3px",
   },
-  plotWrap: {
+  body: {
     flex: 1,
     minHeight: 0,
-    position: "relative",
-  },
-  hintBanner: {
-    background: "rgba(80, 60, 30, 0.45)",
-    color: "rgba(240,230,200,0.95)",
-    fontSize: 11,
-    padding: "5px 12px",
-    borderBottom: "1px solid rgba(180,140,60,0.35)",
-    lineHeight: 1.4,
-  },
-  hintBannerLink: {
-    color: "rgba(160, 200, 255, 0.95)",
-    textDecoration: "underline",
-    cursor: "pointer",
-  },
-  thumbsArea: {
-    padding: "8px 12px",
-    borderTop: "1px solid rgba(120,120,140,0.18)",
     overflowY: "auto",
-    maxHeight: "40%",
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
-  diffRow: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr 1fr",
-    gap: 12,
-  },
-  diffCol: {
-    minWidth: 0,
-  },
-  contextPreview: {
-    borderTop: "1px dashed rgba(120,120,140,0.25)",
-    paddingTop: 8,
   },
   empty: {
     display: "flex",
@@ -1054,12 +1017,12 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     height: "100%",
-    color: "rgba(170,170,190,0.85)",
+    color: "rgba(170,170,190,.85)",
     fontSize: 13,
     textAlign: "center",
     padding: 16,
   },
-  gridCta: {
+  cta: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -1069,23 +1032,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 24,
     textAlign: "center",
   },
-  gridCtaTitle: {
-    fontSize: 14,
-    color: "rgba(220,220,230,0.9)",
-    margin: 0,
-  },
-  hint: {
-    color: "rgba(140,140,160,0.7)",
-    fontSize: 11,
-    maxWidth: 360,
-    margin: 0,
-  },
   status: {
     display: "flex",
     justifyContent: "space-between",
-    padding: "4px 12px",
-    fontSize: 11,
-    color: "rgba(160,160,180,0.7)",
-    borderTop: "1px solid rgba(120,120,140,0.18)",
+    padding: "7px 16px",
+    background: "#121417",
+    borderTop: `1px solid ${T.border}`,
+    fontFamily: T.mono,
+    fontSize: 10.5,
+    color: "#737b83",
   },
 };
