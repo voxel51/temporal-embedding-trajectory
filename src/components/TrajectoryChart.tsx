@@ -65,14 +65,24 @@ export default function TrajectoryChart({
     };
   }, [points]);
 
-  const grey = useMemo(() => {
-    const out: Array<{ key: number; cx: string; cy: string }> = [];
+  // Base cloud: every frame, tinted by its scene at a muted tone so the
+  // embedding structure is readable before any playback/selection; the
+  // trail re-draws the recent window on top in vivid color.
+  const base = useMemo(() => {
+    const out: Array<{ key: number; cx: string; cy: string; fill: string }> = [];
     const step = Math.max(1, Math.floor(n / 850));
+    const L = T.mode === "dark" ? 46 : 72;
     for (let i = 0; i < n; i += step) {
-      out.push({ key: i, cx: px(points[i][0]).toFixed(1), cy: py(points[i][1]).toFixed(1) });
+      const hue = [228, 42, 152, 296, 86, 200][(sceneOf[i] ?? 0) % 6];
+      out.push({
+        key: i,
+        cx: px(points[i][0]).toFixed(1),
+        cy: py(points[i][1]).toFixed(1),
+        fill: `oklch(${L}% 0.07 ${hue})`,
+      });
     }
     return out;
-  }, [n, points, px, py]);
+  }, [n, points, px, py, sceneOf, T.mode]);
 
   const { trailPath, trail } = useMemo(() => {
     if (cursorIdx < 0) return { trailPath: "", trail: [] as Array<{ key: number; cx: string; cy: string; fill: string }> };
@@ -123,8 +133,8 @@ export default function TrajectoryChart({
         <rect x={0.5} y={0.5} width={W - 1} height={H - 1} rx={6} fill="none" stroke={T.gridSoft} />
         <line x1={0} x2={W} y1={H / 2} y2={H / 2} stroke={T.grid} />
         <line x1={W / 2} x2={W / 2} y1={0} y2={H} stroke={T.grid} />
-        {grey.map((p) => (
-          <circle key={p.key} cx={p.cx} cy={p.cy} r={1.8} fill={T.greyPoint} />
+        {base.map((p) => (
+          <circle key={p.key} cx={p.cx} cy={p.cy} r={2.4} fill={p.fill} opacity={0.85} />
         ))}
         <path d={trailPath} fill="none" stroke={T.trailLine} strokeWidth={1} opacity={0.28} />
         {trail.map((p) => (

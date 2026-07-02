@@ -56,7 +56,7 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
   // ── Panel state ────────────────────────────────────────────────────
   const [view, setView] = usePanelStatePartial<ViewKind>(
     "viewMode2",
-    "timeline",
+    "trajectory",
     true
   );
   const [metric, setMetric] = usePanelStatePartial<MetricKind>(
