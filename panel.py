@@ -292,6 +292,13 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
                 if fp
             }
             ctx.panel.set_data("frame_media", media)
+            # Diagnostic: which URL resolver is active ("media_cache",
+            # "signed_url", "primitives-failed", or None for passthrough).
+            # Visible in the execute response / panel data when debugging
+            # blank thumbnails on Enterprise deployments.
+            ctx.panel.set_data(
+                "media_resolver", _media_url_mode or "passthrough(v0.3.0)"
+            )
             return media
         except Exception as e:
             # The per-request log stream may itself be closed; never
