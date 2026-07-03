@@ -21,15 +21,56 @@ from fiftyone.operators.panel import Panel, PanelConfig
 
 from .operators import ComputeTrajectoryEmbeddings
 
-try:
-    # FiftyOne Enterprise: resolve cloud filepaths (s3://, gs://, ...) to
-    # signed HTTPS URLs the browser can load directly. Local and http
-    # paths pass through unchanged.
-    from fiftyone.server.routes.signed_url import get_signed_url
-except ImportError:
-    # OSS: the App serves local filepaths via its /media route, and the
-    # frontend's getSampleSrc() handles that wrapping — passthrough here.
-    def get_signed_url(path):
+_media_url_mode = None
+
+
+def _resolve_media_url(path):
+    """Resolve a filepath to something the browser can load.
+
+    - Local / http(s) paths pass through: the frontend's getSampleSrc()
+      wraps local paths in the App's ``/media`` route and returns
+      absolute URLs untouched.
+    - Cloud paths (``s3://``, ``gs://``, ...) only exist on FiftyOne
+      Enterprise and must be resolved to signed HTTPS URLs. We call the
+      underlying primitives directly (``fiftyone.core.storage`` +
+      ``media_cache.get_url``) rather than importing the newer
+      ``fiftyone.server.routes.signed_url`` helper, which is not present
+      in all deployed releases; that helper is kept as a fallback.
+    """
+    global _media_url_mode
+    if not path:
+        return path
+    try:
+        import fiftyone.core.storage as fost
+
+        fs = fost.get_file_system(path)
+        if fs in (fost.FileSystem.LOCAL, fost.FileSystem.HTTP):
+            return path
+
+        # Cloud path — sign it (Enterprise only)
+        import fiftyone.core.cache as focache
+
+        media_cache = getattr(focache, "media_cache", None)
+        if media_cache is not None:
+            url = media_cache.get_url(path, method="GET", hours=24)
+            if _media_url_mode != "media_cache":
+                _media_url_mode = "media_cache"
+                logger.info("media URLs resolved via media_cache.get_url")
+            return url
+    except Exception as e:
+        if _media_url_mode != "primitives-failed":
+            _media_url_mode = "primitives-failed"
+            logger.warning("media_cache URL resolution unavailable: %s", e)
+
+    try:
+        from fiftyone.server.routes.signed_url import get_signed_url as _gsu
+
+        url = _gsu(path)
+        if _media_url_mode != "signed_url":
+            _media_url_mode = "signed_url"
+            logger.info("media URLs resolved via signed_url helper")
+        return url
+    except Exception:
         return path
 
 
@@ -232,7 +273,13 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
                     # is a cheap view-only stage.
                     ds_key = getattr(dataset, "name", None) or id(dataset)
                     if ds_key not in _FRAMES_WARMED:
-                        dataset.to_frames(sample_frames=True)
+                        # Only extract frames when the dataset doesn't
+                        # already have frame images (e.g. Enterprise
+                        # datasets often store per-frame jpgs in cloud
+                        # storage alongside the videos — extracting
+                        # there would be slow and wrong).
+                        if not dataset.count("frames.filepath"):
+                            dataset.to_frames(sample_frames=True)
                         _FRAMES_WARMED.add(ds_key)
                     view = dataset.to_frames().select(frame_ids)
                 else:
@@ -240,7 +287,7 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
 
                 ids, filepaths = view.values(["id", "filepath"])
             media = {
-                str(i): get_signed_url(fp)
+                str(i): _resolve_media_url(fp)
                 for i, fp in zip(ids, filepaths)
                 if fp
             }
