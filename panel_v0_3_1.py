@@ -19,7 +19,7 @@ import fiftyone.operators.types as types
 from fiftyone.operators.categories import Categories
 from fiftyone.operators.panel import Panel, PanelConfig
 
-from .operators import ComputeTrajectoryEmbeddings
+from .operators_v0_3_1 import ComputeTrajectoryEmbeddings
 
 _media_url_mode = None
 
@@ -297,7 +297,7 @@ class TemporalEmbeddingTrajectoryPanel(Panel):
             # Visible in the execute response / panel data when debugging
             # blank thumbnails on Enterprise deployments.
             ctx.panel.set_data(
-                "media_resolver", _media_url_mode or "passthrough(v0.3.0)"
+                "media_resolver", _media_url_mode or "passthrough(v0.3.1)"
             )
             return media
         except Exception as e:

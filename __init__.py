@@ -14,8 +14,8 @@ JS plugin (``dist/index.umd.js``), which self-registers it on load.
 |
 """
 
-from .panel import TemporalEmbeddingTrajectoryPanel
-from .operators import ComputeTrajectoryEmbeddings
+from .panel_v0_3_1 import TemporalEmbeddingTrajectoryPanel
+from .operators_v0_3_1 import ComputeTrajectoryEmbeddings
 
 
 def register(p):
