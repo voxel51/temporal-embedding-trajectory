@@ -211,16 +211,15 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
 
   const handleSeek = useCallback(
     (frameNumber: number) => {
+      // NOTE: no cross-sample set_view fallback here. The old grid-scatter
+      // design triggered seek_to_frame (server-side set_view) when the
+      // loaded scene lagged the modal sample; on Enterprise that rewrote
+      // the app view mid-modal and could wedge the video player with a
+      // bad router navigation (/datasets/<ds>/[object Object] 404).
       setSelectedFrame(frameNumber);
       seekFrame(frameNumber);
-      if (sceneA && currentSampleId && currentSampleId !== sceneA.sample_id) {
-        triggers.seekToFrame({
-          sample_id: sceneA.sample_id,
-          frame_number: frameNumber,
-        });
-      }
     },
-    [seekFrame, setSelectedFrame, sceneA, currentSampleId, triggers]
+    [seekFrame, setSelectedFrame]
   );
 
   // ←/→ step frames (⇧ = ×10), per the design.
