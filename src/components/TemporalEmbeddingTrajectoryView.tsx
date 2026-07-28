@@ -217,9 +217,12 @@ function TemporalEmbeddingTrajectoryReady(props: TrajectoryViewProps) {
       // the app view mid-modal and could wedge the video player with a
       // bad router navigation (/datasets/<ds>/[object Object] 404).
       setSelectedFrame(frameNumber);
-      seekFrame(frameNumber);
+      // Pass the scene's frame count so the hook can map frame→time for a
+      // native <video> looker (enables panel→video seeking, not just the
+      // imavid timeline path).
+      seekFrame(frameNumber, nA);
     },
-    [seekFrame, setSelectedFrame]
+    [seekFrame, setSelectedFrame, nA]
   );
 
   // ←/→ step frames (⇧ = ×10), per the design.

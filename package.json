@@ -1,6 +1,6 @@
 {
     "name": "@voxel51/temporal-embedding-trajectory",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "description": "Per-frame embedding trajectory panel for video scene analysis",
     "license": "Apache-2.0",
     "scripts": {

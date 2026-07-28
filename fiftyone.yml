@@ -1,7 +1,7 @@
 name: "@voxel51/temporal-embedding-trajectory"
 type: plugin
 description: Per-frame embedding trajectory panel for video scene analysis
-version: 0.3.2
+version: 0.3.3
 author: Voxel51
 license: Apache 2.0
 url: https://github.com/voxel51/temporal-embedding-trajectory
